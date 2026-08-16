@@ -1,0 +1,292 @@
+html,
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+    background: #111;
+    font-family: Arial, sans-serif;
+}
+
+canvas {
+    display: block;
+}
+
+#crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 3px #000;
+    z-index: 5;
+    pointer-events: none;
+}
+
+#overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    z-index: 10;
+}
+
+#overlay p {
+    max-width: 480px;
+    line-height: 1.6;
+}
+
+#startBtn {
+    margin-top: 20px;
+    padding: 14px 34px;
+    font-size: 18px;
+    cursor: pointer;
+    background: #3a86ff;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+}
+
+#debugOverlay {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 20;
+    min-width: 240px;
+    max-width: 340px;
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    background: rgba(8, 12, 20, 0.75);
+    color: #d8e4ff;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+#glareOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    pointer-events: none;
+    /* ДЕЛАЕМ БОЛЕЕ ЯРКИМ ДЛЯ ОСЛЕПЛЕНИЯ */
+    background: radial-gradient(circle at center,
+            rgba(255, 255, 255, 1) 0%,
+            /* ← 0.85 → 1.0 (полностью белый) */
+            rgba(255, 240, 200, 0.9) 15%,
+            /* ← добавляем больше яркости */
+            rgba(255, 200, 100, 0.5) 30%,
+            /* ← расширяем зону */
+            rgba(255, 255, 255, 0) 70%
+            /* ← увеличиваем радиус */
+        );
+    opacity: 0;
+    transition: opacity 0.5s ease-out;
+    /* ← быстрее реагирует */
+    mix-blend-mode: screen;
+}
+
+.debug-title {
+    margin-bottom: 10px;
+    color: #ffffff;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.debug-gizmo-wrap {
+    width: 180px;
+    height: 180px;
+    margin-bottom: 12px;
+    border-radius: 14px;
+    background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 58%, rgba(0, 0, 0, 0.08) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+
+.debug-gizmo {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.debug-body {
+    white-space: pre-line;
+}
+
+#editorOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: none;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 16px;
+    pointer-events: none;
+}
+
+#editorOverlay.is-open {
+    display: flex;
+}
+
+.editor-panel {
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 18px;
+    background: rgba(8, 12, 20, 0.9);
+    color: #ecf4ff;
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+    pointer-events: auto;
+}
+
+.editor-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.editor-title {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.editor-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(236, 244, 255, 0.7);
+    line-height: 1.4;
+}
+
+.editor-close,
+.editor-copy,
+.editor-brush {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ecf4ff;
+    border-radius: 10px;
+    cursor: pointer;
+}
+
+.editor-close {
+    padding: 10px 14px;
+}
+
+.editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.editor-brush {
+    padding: 9px 12px;
+    font-size: 13px;
+}
+
+.editor-brush.is-active {
+    background: #3a86ff;
+    border-color: #3a86ff;
+}
+
+.editor-grid-wrap {
+    overflow: auto;
+    max-height: min(56vh, 560px);
+    padding: 10px;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editor-grid {
+    display: grid;
+    gap: 4px;
+}
+
+.editor-cell {
+    aspect-ratio: 1;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font: inherit;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+}
+
+.editor-cell:hover {
+    transform: translateY(-1px);
+    border-color: rgba(58, 134, 255, 0.7);
+}
+
+.editor-cell.cell-wall {
+    background: #8b5a2b;
+}
+
+.editor-cell.cell-horizontal {
+    background: #8b5a2b;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.editor-cell.cell-vertical {
+    background: #8b5a2b;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.editor-cell.cell-spawn {
+    background: #1c7c54;
+    border-color: #2dd881;
+}
+
+.editor-export {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    box-sizing: border-box;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #ecf4ff;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.editor-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.editor-copy {
+    padding: 10px 14px;
+}
+
+.editor-hint {
+    font-size: 12px;
+    color: rgba(236, 244, 255, 0.66);
+}

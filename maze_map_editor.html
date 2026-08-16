@@ -1,0 +1,1020 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maze Map Editor</title>
+<style>
+  :root {
+    --bg: #111318;
+    --panel: #1a1d24;
+    --panel2: #222631;
+    --border: #343946;
+    --text: #e8ebf0;
+    --muted: #9da5b4;
+    --accent: #5b9cff;
+    --wall: #6b4a2e;
+    --empty: #f5f5f2;
+    --grid: #c9c9c3;
+    --lamp: #ffd34d;
+    --spawn: #43c77a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 290px 1fr 330px;
+  }
+
+  .sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow: auto;
+  }
+
+  .rightbar {
+    border-left: 1px solid var(--border);
+    border-right: 0;
+  }
+
+  h1 {
+    font-size: 18px;
+    margin: 0 0 4px;
+  }
+
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin: 20px 0 9px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  button {
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+
+  button:hover { border-color: #555d6e; }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  button.danger {
+    background: #40242a;
+    border-color: #6b343f;
+  }
+
+  .tool-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .tool.active {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .tool-symbol {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    margin-right: 5px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+
+  .wall-s { background: var(--wall); color: white; }
+  .empty-s { background: var(--empty); color: #333; }
+  .lamp-s { background: var(--lamp); color: #5d4a00; }
+  .spawn-s { background: var(--spawn); color: white; }
+
+  .row {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+
+  .row > * { min-width: 0; }
+  .row button { flex: 1; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 8px 0 4px;
+  }
+
+  input[type="number"], input[type="text"], select {
+    width: 100%;
+    background: #11141a;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 8px;
+  }
+
+  .dims {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .hint {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  .stat {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .stat div {
+    background: #13161c;
+    border: 1px solid var(--border);
+    padding: 7px;
+    border-radius: 6px;
+  }
+
+  .stat b { display: block; font-size: 15px; margin-top: 2px; }
+
+  .canvas-wrap {
+    position: relative;
+    overflow: hidden;
+    background: #0d0f13;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+
+  .topbar {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  .badge {
+    pointer-events: auto;
+    background: rgba(22,25,32,.92);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    backdrop-filter: blur(5px);
+  }
+
+  textarea {
+    width: 100%;
+    height: 240px;
+    resize: vertical;
+    background: #0d1015;
+    color: #dce2eb;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 9px;
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .file-label {
+    display: block;
+    text-align: center;
+    border: 1px dashed #4a5261;
+    border-radius: 7px;
+    padding: 9px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .file-label:hover { border-color: var(--accent); color: var(--text); }
+  #fileInput { display: none; }
+
+  .keys {
+    font: 11px ui-monospace, monospace;
+    color: var(--muted);
+    line-height: 1.65;
+  }
+
+  .sep {
+    height: 1px;
+    background: var(--border);
+    margin: 14px 0;
+  }
+
+  @media (max-width: 1050px) {
+    .app { grid-template-columns: 230px 1fr; }
+    .rightbar { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h1>Maze Map Editor</h1>
+    <div class="subtitle">Графический редактор ASCII-карт для твоего Three.js уровня.</div>
+
+    <h2>Инструменты</h2>
+    <div class="tool-grid">
+      <button class="tool active" data-tool="#"><span class="tool-symbol wall-s">#</span>Стена</button>
+      <button class="tool" data-tool="."><span class="tool-symbol empty-s">.</span>Пусто</button>
+      <button class="tool" data-tool="L"><span class="tool-symbol lamp-s">L</span>Лампа</button>
+      <button class="tool" data-tool="S"><span class="tool-symbol spawn-s">S</span>Спавн</button>
+    </div>
+
+    <h2>Размер карты</h2>
+    <div class="dims">
+      <div>
+        <label for="rows">Строки</label>
+        <input id="rows" type="number" min="1" max="500" value="50">
+      </div>
+      <div>
+        <label for="cols">Столбцы</label>
+        <input id="cols" type="number" min="1" max="500" value="100">
+      </div>
+    </div>
+    <div class="row" style="margin-top:7px">
+      <button id="resizeBtn" class="primary">Применить размер</button>
+    </div>
+
+    <h2>Редактирование</h2>
+    <div class="row">
+      <button id="undoBtn">↶ Undo</button>
+      <button id="redoBtn">↷ Redo</button>
+    </div>
+    <div class="row" style="margin-top:7px">
+      <button id="clearBtn">Очистить</button>
+      <button id="borderBtn">Рамка</button>
+    </div>
+
+    <h2>Лампы</h2>
+    <label for="lampStep">Интервал ламп</label>
+    <input id="lampStep" type="number" min="1" max="1000" value="10">
+    <button id="autoLampBtn" style="width:100%;margin-top:7px">Расставить L через N клеток</button>
+    <div class="hint">
+      Автоматическая расстановка идёт по выбранному маршруту: клетки с точками учитываются как проходимые.
+      Уже существующие L сохраняются.
+    </div>
+
+    <h2>Масштаб</h2>
+    <div class="row">
+      <button id="zoomOut">−</button>
+      <button id="fitBtn">Вписать</button>
+      <button id="zoomIn">+</button>
+    </div>
+
+    <h2>Горячие клавиши</h2>
+    <div class="keys">
+      ЛКМ — рисовать<br>
+      Shift + ЛКМ — рисовать временной линией<br>
+      Колесо — zoom<br>
+      Space + drag — перемещение<br>
+      Ctrl+Z / Ctrl+Y — undo / redo<br>
+      1 — стена, 2 — пусто<br>
+      3 — лампа, 4 — спавн<br>
+      E — ластик (пусто)
+    </div>
+
+    <div class="sep"></div>
+    <div class="stat">
+      <div>Стены <b id="wallCount">0</b></div>
+      <div>Лампы <b id="lampCount">0</b></div>
+      <div>Пустые <b id="emptyCount">0</b></div>
+      <div>Спавн <b id="spawnCount">0</b></div>
+    </div>
+  </aside>
+
+  <main class="canvas-wrap" id="canvasWrap">
+    <canvas id="canvas"></canvas>
+    <div class="topbar">
+      <div class="badge" id="coords">—</div>
+      <div class="badge" id="zoomLabel">100%</div>
+    </div>
+  </main>
+
+  <aside class="sidebar rightbar">
+    <h1>Импорт / экспорт</h1>
+    <div class="subtitle">Можно работать с готовым MAZE_MAP или с JSON-файлом.</div>
+
+    <h2>ASCII-карта</h2>
+    <textarea id="ascii" spellcheck="false" placeholder='["###...", "#..L.", "#..S."]'></textarea>
+
+    <div class="row" style="margin-top:7px">
+      <button id="loadAsciiBtn" class="primary">Загрузить в редактор</button>
+      <button id="copyAsciiBtn">Копировать</button>
+    </div>
+
+    <h2>Экспорт JS</h2>
+    <textarea id="jsOutput" readonly spellcheck="false"></textarea>
+    <div class="row" style="margin-top:7px">
+      <button id="copyJsBtn" class="primary">Копировать JS</button>
+      <button id="downloadJsBtn">.js</button>
+    </div>
+
+    <h2>Файл</h2>
+    <div class="row">
+      <button id="downloadJsonBtn">Экспорт JSON</button>
+      <label class="file-label" for="fileInput">Импорт JSON / TXT</label>
+      <input id="fileInput" type="file" accept=".json,.txt,.js">
+    </div>
+
+    <h2>Формат</h2>
+    <div class="hint">
+      <b>#</b> — стена<br>
+      <b>.</b> — пустота<br>
+      <b>L</b> — лампа<br>
+      <b>S</b> — единственная точка спавна
+    </div>
+
+    <h2>Сохранение</h2>
+    <div class="row">
+      <button id="saveLocalBtn">Сохранить в браузере</button>
+      <button id="loadLocalBtn">Загрузить</button>
+    </div>
+    <div class="hint">Состояние хранится локально в браузере. Это удобно для промежуточной работы.</div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('canvasWrap');
+
+  const rowsInput = document.getElementById('rows');
+  const colsInput = document.getElementById('cols');
+  const ascii = document.getElementById('ascii');
+  const jsOutput = document.getElementById('jsOutput');
+
+  let rows = 50;
+  let cols = 100;
+  let map = [];
+  let tool = '#';
+
+  let cellSize = 16;
+  let offsetX = 30;
+  let offsetY = 60;
+
+  let isDrawing = false;
+  let isPanning = false;
+  let spaceDown = false;
+  let lastCell = null;
+  let panStart = null;
+
+  const undoStack = [];
+  const redoStack = [];
+  const MAX_HISTORY = 100;
+
+  function makeEmpty(r, c) {
+    return Array.from({length: r}, () => Array(c).fill('.'));
+  }
+
+  function cloneMap(m) {
+    return m.map(row => row.slice());
+  }
+
+  function pushHistory() {
+    undoStack.push(cloneMap(map));
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack.length = 0;
+  }
+
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(cloneMap(map));
+    map = undoStack.pop();
+    rows = map.length;
+    cols = map[0]?.length || 1;
+    syncDimensions();
+    render();
+  }
+
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(cloneMap(map));
+    map = redoStack.pop();
+    rows = map.length;
+    cols = map[0]?.length || 1;
+    syncDimensions();
+    render();
+  }
+
+  function syncDimensions() {
+    rowsInput.value = rows;
+    colsInput.value = cols;
+  }
+
+  function resizeMap(newRows, newCols) {
+    newRows = Math.max(1, Math.min(500, Number(newRows) || 1));
+    newCols = Math.max(1, Math.min(500, Number(newCols) || 1));
+
+    pushHistory();
+
+    const next = makeEmpty(newRows, newCols);
+    for (let y = 0; y < Math.min(rows, newRows); y++) {
+      for (let x = 0; x < Math.min(cols, newCols); x++) {
+        next[y][x] = map[y][x];
+      }
+    }
+
+    rows = newRows;
+    cols = newCols;
+    map = next;
+    syncDimensions();
+    fitToScreen();
+    render();
+  }
+
+  function setCell(x, y, value) {
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+    if (value === 'S') {
+      for (let yy = 0; yy < rows; yy++) {
+        for (let xx = 0; xx < cols; xx++) {
+          if (map[yy][xx] === 'S') map[yy][xx] = '.';
+        }
+      }
+    }
+    if (map[y][x] === value) return;
+    map[y][x] = value;
+  }
+
+  function paintAt(x, y) {
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+    setCell(x, y, tool);
+    render();
+  }
+
+  function lineCells(x0, y0, x1, y1) {
+    const cells = [];
+    let dx = Math.abs(x1 - x0);
+    let sx = x0 < x1 ? 1 : -1;
+    let dy = -Math.abs(y1 - y0);
+    let sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+
+    while (true) {
+      cells.push([x0, y0]);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+    return cells;
+  }
+
+  function paintLine(x0, y0, x1, y1) {
+    for (const [x, y] of lineCells(x0, y0, x1, y1)) {
+      setCell(x, y, tool);
+    }
+    render();
+  }
+
+  function getCellFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const x = Math.floor((px - offsetX) / cellSize);
+    const y = Math.floor((py - offsetY) / cellSize);
+    return {x, y};
+  }
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(wrap.clientWidth * dpr);
+    canvas.height = Math.floor(wrap.clientHeight * dpr);
+    canvas.style.width = wrap.clientWidth + 'px';
+    canvas.style.height = wrap.clientHeight + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    render();
+  }
+
+  function render() {
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0d0f13';
+    ctx.fillRect(0, 0, w, h);
+
+    const startX = offsetX;
+    const startY = offsetY;
+    const endX = startX + cols * cellSize;
+    const endY = startY + rows * cellSize;
+
+    // Background
+    ctx.fillStyle = '#f5f5f2';
+    ctx.fillRect(startX, startY, cols * cellSize, rows * cellSize);
+
+    // Cells
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const v = map[y][x];
+        const px = startX + x * cellSize;
+        const py = startY + y * cellSize;
+
+        if (v === '#') {
+          ctx.fillStyle = '#6b4a2e';
+          ctx.fillRect(px, py, cellSize, cellSize);
+        } else if (v === 'L') {
+          ctx.fillStyle = '#f5f5f2';
+          ctx.fillRect(px, py, cellSize, cellSize);
+          ctx.fillStyle = '#ffd34d';
+          ctx.beginPath();
+          ctx.arc(px + cellSize / 2, py + cellSize / 2, Math.max(2.5, cellSize * .28), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#8b7000';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        } else if (v === 'S') {
+          ctx.fillStyle = '#f5f5f2';
+          ctx.fillRect(px, py, cellSize, cellSize);
+          ctx.fillStyle = '#43c77a';
+          ctx.beginPath();
+          ctx.arc(px + cellSize / 2, py + cellSize / 2, Math.max(3, cellSize * .32), 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        if (cellSize >= 7) {
+          ctx.strokeStyle = '#d0d0cb';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(px, py, cellSize, cellSize);
+        }
+      }
+    }
+
+    // Outer border
+    ctx.strokeStyle = '#777';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(startX, startY, cols * cellSize, rows * cellSize);
+
+    updateStats();
+    updateOutputs();
+    document.getElementById('zoomLabel').textContent =
+      Math.round(cellSize / 16 * 100) + '%';
+  }
+
+  function updateStats() {
+    let wall = 0, lamp = 0, empty = 0, spawn = 0;
+    for (const row of map) {
+      for (const c of row) {
+        if (c === '#') wall++;
+        else if (c === 'L') lamp++;
+        else if (c === 'S') spawn++;
+        else empty++;
+      }
+    }
+    document.getElementById('wallCount').textContent = wall;
+    document.getElementById('lampCount').textContent = lamp;
+    document.getElementById('emptyCount').textContent = empty;
+    document.getElementById('spawnCount').textContent = spawn;
+  }
+
+  function mapToStrings() {
+    return map.map(row => row.join(''));
+  }
+
+  function updateOutputs() {
+    const strings = mapToStrings();
+    ascii.value = JSON.stringify(strings, null, 2);
+
+    jsOutput.value =
+`const MAZE_MAP = ${JSON.stringify(strings, null, 2)};
+
+window.levelMap = MAZE_MAP;
+window.spawnPoint = null;
+
+function rebuildLevelFromMap() {
+  const spawn = buildMazeFromAsciiMap(window.levelMap, {
+    cellSize: LEVEL_CELL_SIZE,
+    wallHeight: LEVEL_CELL_SIZE * 3,
+    wallDepth: 0.5,
+    wallColor: 0x8b5a2b,
+  });
+
+  if (spawn) {
+    window.spawnPoint = spawn;
+    camera.position.set(spawn.x, spawn.y, spawn.z);
+  }
+
+  return spawn;
+}
+
+window.rebuildLevelFromMap = rebuildLevelFromMap;
+rebuildLevelFromMap();
+
+if (typeof window.setNightMode === "function") {
+  window.setNightMode(true);
+}`;
+  }
+
+  function fitToScreen() {
+    const w = wrap.clientWidth - 70;
+    const h = wrap.clientHeight - 110;
+    cellSize = Math.max(2, Math.min(48, Math.min(w / cols, h / rows)));
+
+    offsetX = Math.max(25, (wrap.clientWidth - cols * cellSize) / 2);
+    offsetY = Math.max(45, (wrap.clientHeight - rows * cellSize) / 2);
+    render();
+  }
+
+  function zoom(factor, centerX = wrap.clientWidth / 2, centerY = wrap.clientHeight / 2) {
+    const old = cellSize;
+    const next = Math.max(2, Math.min(80, old * factor));
+    if (next === old) return;
+
+    offsetX = centerX - (centerX - offsetX) * (next / old);
+    offsetY = centerY - (centerY - offsetY) * (next / old);
+    cellSize = next;
+    render();
+  }
+
+  function normalizeImported(input) {
+    input = input.trim();
+
+    // JSON array
+    try {
+      const parsed = JSON.parse(input);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && Array.isArray(parsed.map)) return parsed.map;
+    } catch (_) {}
+
+    // Extract the first JS array assigned to MAZE_MAP
+    const match = input.match(/MAZE_MAP\\s*=\\s*(\\[[\\s\\S]*?\\])\\s*;/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (_) {}
+    }
+
+    // Fallback: lines such as #...L...
+    const lines = input
+      .split(/\\r?\\n/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(s => !s.startsWith('const ') && !s.startsWith('window.') && !s.startsWith('//'));
+
+    if (lines.length && lines.every(s => /^[.#LS]+$/.test(s))) return lines;
+
+    throw new Error('Не удалось распознать карту. Ожидается JSON-массив строк или MAZE_MAP.');
+  }
+
+  function loadMapStrings(strings) {
+    if (!Array.isArray(strings) || !strings.length) {
+      throw new Error('Пустая карта.');
+    }
+
+    const cleaned = strings.map(s => String(s));
+    const width = cleaned[0].length;
+
+    if (!width) throw new Error('У карты нулевая ширина.');
+    if (!cleaned.every(s => s.length === width)) {
+      throw new Error('Все строки карты должны быть одинаковой длины.');
+    }
+    if (!cleaned.every(s => /^[.#LS]+$/.test(s))) {
+      throw new Error('Разрешены только символы # . L S.');
+    }
+
+    const spawnCount = cleaned.reduce((n, row) => n + [...row].filter(c => c === 'S').length, 0);
+    if (spawnCount > 1) throw new Error('В карте может быть только один S.');
+
+    pushHistory();
+    rows = cleaned.length;
+    cols = width;
+    map = cleaned.map(s => [...s]);
+    syncDimensions();
+    fitToScreen();
+    render();
+  }
+
+  function copyText(text) {
+    navigator.clipboard.writeText(text).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    });
+  }
+
+  function autoLamps() {
+    const step = Math.max(1, Number(document.getElementById('lampStep').value) || 10);
+
+    // BFS from S. If S doesn't exist, start at the first walkable cell.
+    let start = null;
+    for (let y = 0; y < rows && !start; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (map[y][x] === 'S') {
+          start = [x, y];
+          break;
+        }
+      }
+    }
+    if (!start) {
+      outer:
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (map[y][x] !== '#') {
+            start = [x, y];
+            break outer;
+          }
+        }
+      }
+    }
+    if (!start) return;
+
+    pushHistory();
+
+    const q = [start];
+    const dist = Array.from({length: rows}, () => Array(cols).fill(-1));
+    dist[start[1]][start[0]] = 0;
+
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+
+    while (q.length) {
+      const [x, y] = q.shift();
+
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+        if (dist[ny][nx] !== -1 || map[ny][nx] === '#') continue;
+        dist[ny][nx] = dist[y][x] + 1;
+        q.push([nx, ny]);
+      }
+    }
+
+    // Preserve existing lamps. Add one every N traversable cells along BFS distance.
+    const existing = new Set();
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (map[y][x] === 'L') existing.add(y + ':' + x);
+      }
+    }
+
+    for (let d = step; d < rows * cols; d += step) {
+      let placed = false;
+      for (let y = 0; y < rows && !placed; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (dist[y][x] === d && map[y][x] === '.') {
+            map[y][x] = 'L';
+            placed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    render();
+  }
+
+  // Tools
+  document.querySelectorAll('.tool').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      tool = btn.dataset.tool;
+    });
+  });
+
+  canvas.addEventListener('pointerdown', e => {
+    if (e.button === 1 || spaceDown) {
+      isPanning = true;
+      panStart = {x: e.clientX, y: e.clientY, ox: offsetX, oy: offsetY};
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (e.button !== 0) return;
+
+    const {x, y} = getCellFromEvent(e);
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+
+    pushHistory();
+    isDrawing = true;
+    lastCell = {x, y};
+    paintAt(x, y);
+    canvas.setPointerCapture(e.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    if (isPanning && panStart) {
+      offsetX = panStart.ox + e.clientX - panStart.x;
+      offsetY = panStart.oy + e.clientY - panStart.y;
+      render();
+      return;
+    }
+
+    const {x, y} = getCellFromEvent(e);
+    document.getElementById('coords').textContent =
+      (x >= 0 && x < cols && y >= 0 && y < rows) ? `x: ${x}  y: ${y}  [${map[y][x]}]` : '—';
+
+    if (!isDrawing) return;
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+
+    if (lastCell && (lastCell.x !== x || lastCell.y !== y)) {
+      paintLine(lastCell.x, lastCell.y, x, y);
+      lastCell = {x, y};
+    }
+  });
+
+  canvas.addEventListener('pointerup', () => {
+    isDrawing = false;
+    isPanning = false;
+    lastCell = null;
+    panStart = null;
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    document.getElementById('coords').textContent = '—';
+  });
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    zoom(e.deltaY < 0 ? 1.12 : 0.89, cx, cy);
+  }, {passive: false});
+
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') {
+      spaceDown = true;
+      e.preventDefault();
+    }
+
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+      if (e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+      return;
+    }
+
+    const keyTools = {'1':'#', '2':'.', '3':'L', '4':'S', 'e':'.'};
+    const key = e.key.toLowerCase();
+    if (keyTools[key]) {
+      tool = keyTools[key];
+      document.querySelectorAll('.tool').forEach(b => {
+        b.classList.toggle('active', b.dataset.tool === tool);
+      });
+    }
+  });
+
+  window.addEventListener('keyup', e => {
+    if (e.code === 'Space') spaceDown = false;
+  });
+
+  document.getElementById('resizeBtn').onclick = () =>
+    resizeMap(rowsInput.value, colsInput.value);
+
+  document.getElementById('undoBtn').onclick = undo;
+  document.getElementById('redoBtn').onclick = redo;
+
+  document.getElementById('clearBtn').onclick = () => {
+    pushHistory();
+    map = makeEmpty(rows, cols);
+    render();
+  };
+
+  document.getElementById('borderBtn').onclick = () => {
+    pushHistory();
+    for (let x = 0; x < cols; x++) {
+      map[0][x] = '#';
+      map[rows - 1][x] = '#';
+    }
+    for (let y = 0; y < rows; y++) {
+      map[y][0] = '#';
+      map[y][cols - 1] = '#';
+    }
+    render();
+  };
+
+  document.getElementById('zoomIn').onclick = () => zoom(1.25);
+  document.getElementById('zoomOut').onclick = () => zoom(.8);
+  document.getElementById('fitBtn').onclick = fitToScreen;
+  document.getElementById('autoLampBtn').onclick = autoLamps;
+
+  document.getElementById('loadAsciiBtn').onclick = () => {
+    try {
+      loadMapStrings(normalizeImported(ascii.value));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  document.getElementById('copyAsciiBtn').onclick = () =>
+    copyText(JSON.stringify(mapToStrings(), null, 2));
+
+  document.getElementById('copyJsBtn').onclick = () => copyText(jsOutput.value);
+
+  document.getElementById('downloadJsBtn').onclick = () => {
+    const blob = new Blob([jsOutput.value], {type: 'text/javascript;charset=utf-8'});
+    downloadBlob(blob, 'maze-map.js');
+  };
+
+  document.getElementById('downloadJsonBtn').onclick = () => {
+    const blob = new Blob([JSON.stringify({
+      version: 1,
+      rows,
+      cols,
+      map: mapToStrings()
+    }, null, 2)], {type: 'application/json;charset=utf-8'});
+    downloadBlob(blob, 'maze-map.json');
+  };
+
+  document.getElementById('fileInput').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let strings;
+      if (file.name.toLowerCase().endsWith('.json')) {
+        const parsed = JSON.parse(text);
+        strings = Array.isArray(parsed) ? parsed : parsed.map;
+      } else {
+        strings = normalizeImported(text);
+      }
+      loadMapStrings(strings);
+    } catch (err) {
+      alert('Ошибка импорта: ' + err.message);
+    }
+    e.target.value = '';
+  });
+
+  document.getElementById('saveLocalBtn').onclick = () => {
+    localStorage.setItem('maze-map-editor', JSON.stringify({
+      rows, cols, map: mapToStrings()
+    }));
+    alert('Карта сохранена в браузере.');
+  };
+
+  document.getElementById('loadLocalBtn').onclick = () => {
+    try {
+      const data = JSON.parse(localStorage.getItem('maze-map-editor') || 'null');
+      if (!data?.map) throw new Error('Сохранённой карты нет.');
+      loadMapStrings(data.map);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Initial map
+  map = makeEmpty(rows, cols);
+  syncDimensions();
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+  fitToScreen();
+})();
+</script>
+</body>
+</html>

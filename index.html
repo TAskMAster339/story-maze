@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Игрок — база</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="overlay">
+      <h1>Игрок — база</h1>
+      <p>
+        W A S D — движение, мышь — обзор, Shift — бег, Esc — отпустить курсор.
+        Tab — открыть редактор лабиринта. В редакторе 1 — стена, 0 — стереть, S
+        — старт.
+      </p>
+      <button id="startBtn">Начать</button>
+    </div>
+    <div id="crosshair"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="scene.js"></script>
+    <script src="maze-level2.js"></script>
+    <script src="debug.js"></script>
+    <script src="editor.js"></script>
+    <script src="player.js"></script>
+  </body>
+</html>
