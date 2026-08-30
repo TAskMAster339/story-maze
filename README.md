@@ -23,9 +23,7 @@
 │   │   ├── debug.js           # Development HUD and level selector
 │   │   ├── editor.js          # In-browser map editor
 │   │   └── style.css          # Global and development UI styles
-│   └── levels/
-│       └── legacy/
-│           └── maze-level.js  # Old map kept for reference only
+│   └── levels/                 # Reserved for future independent levels
 └── ...                        # Static images and experiments
 ```
 
@@ -69,3 +67,16 @@ loadLevel("my-level");
 ```
 
 Maps are normalized and validated before they are registered or built.
+
+## Story content
+
+The only active map is `src/world/maze-level2.js`. Its `NARRATIVE` object contains
+floating panels. Add project panels to `NARRATIVE.projects` using world coordinates:
+
+```js
+{ x: -20, y: 3.5, z: 14, title: "Project name", text: "Description", image: "assets/project.jpg" }
+```
+
+Panels are sprites, so text and images always face the player. The map symbol `T`
+is a seamless return point to `S`. Fog is enabled only inside the calculated maze
+rectangle; outside it, the fog disappears and the procedural star field remains visible.

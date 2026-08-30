@@ -45,15 +45,7 @@
     return activeLevelId;
   }
 
-  registerLevel("main", global.levelMap, { name: "Основной лабиринт" });
-  registerLevel("training", [
-    "#########",
-    "#S......#",
-    "#..L....#",
-    "#...###.#",
-    "#.......#",
-    "#########",
-  ], { name: "Тренировочная комната" });
+  registerLevel("main", global.levelMap, { name: "Лабиринт разума" });
   activeLevelId = "main";
 
   global.levelRegistry = { registerLevel, loadLevel, listLevels, getActiveLevelId };

@@ -1,5 +1,7 @@
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb);
+scene.background = new THREE.Color(0x050816);
+const mazeFog = new THREE.Fog(0x070b18, 2.5, 29);
+scene.fog = mazeFog;
 
 const camera = new THREE.PerspectiveCamera(
   75,
@@ -10,7 +12,7 @@ const camera = new THREE.PerspectiveCamera(
 const PLAYER_HEIGHT = 1.7;
 camera.position.set(0, PLAYER_HEIGHT, 0);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(
   Math.min(window.devicePixelRatio || 1, window.GAME_CONFIG.render.maxPixelRatio),
@@ -18,6 +20,102 @@ renderer.setPixelRatio(
 document.body.appendChild(renderer.domElement);
 renderer.shadowMap.enabled = window.GAME_CONFIG.render.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+function createSkyRandom(seed = 0x5a17c9e3) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+const skyRadius = 460;
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(skyRadius, 32, 20),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    vertexShader: `
+      varying vec3 vSkyDirection;
+      void main() {
+        vSkyDirection = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vSkyDirection;
+      void main() {
+        float height = clamp(vSkyDirection.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 lowColor = vec3(0.004, 0.007, 0.025);
+        vec3 horizonColor = vec3(0.025, 0.040, 0.105);
+        vec3 zenithColor = vec3(0.005, 0.008, 0.035);
+        vec3 lowerSky = mix(lowColor, horizonColor, smoothstep(0.0, 0.5, height));
+        vec3 upperSky = mix(horizonColor, zenithColor, smoothstep(0.5, 1.0, height));
+        gl_FragColor = vec4(height < 0.5 ? lowerSky : upperSky, 1.0);
+      }
+    `,
+  }),
+);
+sky.renderOrder = -1000;
+sky.frustumCulled = false;
+
+const starCount = 2200;
+const starPositions = new Float32Array(starCount * 3);
+const starColors = new Float32Array(starCount * 3);
+const starSizes = new Float32Array(starCount);
+const skyRandom = createSkyRandom();
+for (let index = 0; index < starCount; index += 1) {
+  const y = skyRandom() * 2 - 1;
+  const azimuth = skyRandom() * Math.PI * 2;
+  const horizontal = Math.sqrt(Math.max(0, 1 - y * y));
+  const offset = index * 3;
+  starPositions[offset] = Math.cos(azimuth) * horizontal * (skyRadius - 2);
+  starPositions[offset + 1] = y * (skyRadius - 2);
+  starPositions[offset + 2] = Math.sin(azimuth) * horizontal * (skyRadius - 2);
+
+  const warmth = skyRandom();
+  starColors[offset] = 0.72 + warmth * 0.28;
+  starColors[offset + 1] = 0.78 + warmth * 0.2;
+  starColors[offset + 2] = 0.9 + skyRandom() * 0.1;
+  starSizes[index] = skyRandom() < 0.035
+    ? 2.4 + skyRandom() * 1.8
+    : 0.75 + skyRandom() * 1.25;
+}
+const starGeometry = new THREE.BufferGeometry();
+starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+starGeometry.setAttribute("color", new THREE.BufferAttribute(starColors, 3));
+starGeometry.setAttribute("starSize", new THREE.BufferAttribute(starSizes, 1));
+const stars = new THREE.Points(
+  starGeometry,
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    vertexColors: true,
+    vertexShader: `
+      attribute float starSize;
+      varying vec3 vStarColor;
+      void main() {
+        vStarColor = color;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = starSize;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vStarColor;
+      void main() {
+        float distanceToCenter = length(gl_PointCoord - vec2(0.5));
+        float alpha = 1.0 - smoothstep(0.18, 0.5, distanceToCenter);
+        if (alpha < 0.01) discard;
+        gl_FragColor = vec4(vStarColor, alpha);
+      }
+    `,
+  }),
+);
+stars.renderOrder = -999;
+stars.frustumCulled = false;
+camera.add(sky);
+camera.add(stars);
+scene.add(camera);
 
 // свет — просто чтобы что-то было видно
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
@@ -84,7 +182,231 @@ const mazeBounds = {
   maxZ: Infinity,
   active: false,
 };
+const teleporters = [];
+const billboards = [];
+const upperFogLayers = [];
+const openSkyCells = new Set();
+const levelGrid = { originX: 0, originZ: 0, cellSize: LEVEL_CELL_SIZE, active: false };
+let fogAmount = 0.58;
+let teleportFog = 0;
+let lastCameraFar = camera.far;
 
+function isInsideMaze(x, z, margin = 0) {
+  return mazeBounds.active && x >= mazeBounds.minX - margin && x <= mazeBounds.maxX + margin &&
+    z >= mazeBounds.minZ - margin && z <= mazeBounds.maxZ + margin;
+}
+
+function getGridCellAt(x, z) {
+  if (!levelGrid.active) return null;
+  return {
+    col: Math.round((x - levelGrid.originX) / levelGrid.cellSize),
+    row: Math.round((z - levelGrid.originZ) / levelGrid.cellSize),
+  };
+}
+
+function isOpenSkyAt(x, z) {
+  const cell = getGridCellAt(x, z);
+  return !!cell && openSkyCells.has(`${cell.row}:${cell.col}`);
+}
+
+function setTeleportFog(strength = 0) {
+  teleportFog = THREE.MathUtils.clamp(strength, 0, 1);
+}
+
+function beginTeleportFogReveal() {
+  teleportFog = 1;
+  fogAmount = 1;
+  scene.fog = mazeFog;
+  mazeFog.near = 0.5;
+  mazeFog.far = 4.5;
+  if (camera.far !== 60) {
+    camera.far = 60;
+    camera.updateProjectionMatrix();
+    lastCameraFar = camera.far;
+  }
+  for (const layer of upperFogLayers) {
+    layer.visible = true;
+    layer.material.opacity = layer.userData.baseOpacity;
+  }
+}
+
+function updateMazeAtmosphere(x, z, dt = 1 / 60) {
+  const outdoors = !isInsideMaze(x, z, 1.5) || isOpenSkyAt(x, z);
+  const target = Math.max(outdoors ? 0 : 0.58, teleportFog);
+  const smoothing = 1 - Math.exp(-Math.max(dt, 0.001) * (target > fogAmount ? 3.8 : 1.7));
+  fogAmount = THREE.MathUtils.lerp(fogAmount, target, smoothing);
+
+  if (fogAmount < 0.006) {
+    scene.fog = null;
+  } else {
+    scene.fog = mazeFog;
+    const clearFactor = 1 - fogAmount;
+    mazeFog.near = 0.5 + clearFactor ** 4 * 40;
+    mazeFog.far = 4.5 + clearFactor ** 4 * 845;
+  }
+
+  const desiredFar = fogAmount < 0.02 ? 900 : Math.max(60, mazeFog.far + 28);
+  if (Math.abs(desiredFar - lastCameraFar) > 1) {
+    camera.far = desiredFar;
+    camera.updateProjectionMatrix();
+    lastCameraFar = desiredFar;
+  }
+
+  const upperFogStrength = THREE.MathUtils.clamp(fogAmount / 0.58, 0, 1);
+  for (const layer of upperFogLayers) {
+    layer.visible = upperFogStrength > 0.01;
+    layer.material.opacity = layer.userData.baseOpacity * upperFogStrength;
+  }
+}
+
+function makeUpperFogTexture(seed) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "rgba(255,255,255,0.28)";
+  context.fillRect(0, 0, 128, 128);
+  let state = (seed + 1) * 2654435761;
+  const random = () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+  for (let index = 0; index < 52; index += 1) {
+    const x = random() * 128;
+    const y = random() * 128;
+    const radius = 10 + random() * 30;
+    const alpha = 0.08 + random() * 0.22;
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(255,255,255,${alpha})`);
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    context.fillStyle = gradient;
+    context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function clearUpperFog() {
+  for (const layer of upperFogLayers) {
+    levelGroup.remove(layer);
+    layer.geometry.dispose();
+    layer.material.map?.dispose();
+    layer.material.dispose();
+  }
+  upperFogLayers.length = 0;
+}
+
+function buildUpperFog(wallHeight) {
+  clearUpperFog();
+  if (!mazeBounds.active) return;
+  const width = mazeBounds.maxX - mazeBounds.minX;
+  const depth = mazeBounds.maxZ - mazeBounds.minZ;
+  const centerX = (mazeBounds.minX + mazeBounds.maxX) / 2;
+  const centerZ = (mazeBounds.minZ + mazeBounds.maxZ) / 2;
+  const layerSettings = [
+    { height: wallHeight + 3, opacity: 0.12 },
+    { height: wallHeight + 5.5, opacity: 0.18 },
+    { height: wallHeight + 8, opacity: 0.28 },
+  ];
+  layerSettings.forEach((settings, index) => {
+    const texture = makeUpperFogTexture(index + 17);
+    texture.repeat.set(Math.max(1, width / 28), Math.max(1, depth / 28));
+    texture.offset.set(index * 0.19, index * 0.31);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x0a1020,
+      map: texture,
+      transparent: true,
+      opacity: settings.opacity,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    const layer = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material);
+    layer.rotation.x = -Math.PI / 2;
+    layer.position.set(centerX, settings.height, centerZ);
+    layer.renderOrder = 20 + index;
+    layer.userData.baseOpacity = settings.opacity;
+    levelGroup.add(layer);
+    upperFogLayers.push(layer);
+  });
+}
+
+function makeBillboardCanvas(title, body, imageUrl = "") {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768; canvas.height = imageUrl ? 640 : 380;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(8, 12, 27, .88)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "rgba(137, 185, 255, .85)"; ctx.lineWidth = 5; ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+  const texture = new THREE.CanvasTexture(canvas);
+  const drawText = () => {
+    ctx.fillStyle = "#f4f7ff"; ctx.font = "bold 42px Arial"; ctx.fillText(title, 38, imageUrl ? 590 : 85);
+    ctx.fillStyle = "#c9d7f5"; ctx.font = "26px Arial";
+    const words = String(body || "").split(/\s+/); let line = ""; let y = imageUrl ? 625 : 135;
+    for (const word of words) { const next = `${line} ${word}`.trim(); if (ctx.measureText(next).width > 690) { ctx.fillText(line, 38, y); line = word; y += 34; } else line = next; }
+    if (line) ctx.fillText(line, 38, y); texture.needsUpdate = true;
+  };
+  if (imageUrl) { const image = new Image(); image.onload = () => { ctx.drawImage(image, 38, 35, 692, 500); drawText(); }; image.src = imageUrl; } else drawText();
+  return texture;
+}
+
+function createBillboard({ x, y = 3.2, z, title, text, image }) {
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeBillboardCanvas(title, text, image), transparent: true, depthWrite: false }));
+  sprite.position.set(x, y, z); sprite.scale.set(image ? 4.4 : 4.1, image ? 3.7 : 2.1, 1);
+  sprite.userData.billboard = true; levelGroup.add(sprite); billboards.push(sprite); return sprite;
+}
+
+function addNarrativeContent(options = {}) {
+  for (const entry of options.signs || []) createBillboard(entry);
+  for (const entry of options.projects || []) createBillboard(entry);
+}
+
+let lastVisibilityCell = "";
+function updateRenderVisibility(x, z) {
+  const visibilityCell = `${Math.floor(x / 8)}:${Math.floor(z / 8)}`;
+  if (visibilityCell === lastVisibilityCell) return;
+  lastVisibilityCell = visibilityCell;
+
+  const lampDistanceSq = 48 ** 2;
+  const nearby = [];
+  for (const lamp of lamps) {
+    const dx = lamp.mesh.position.x - x;
+    const dz = lamp.mesh.position.z - z;
+    const distanceSq = dx * dx + dz * dz;
+    const visible = distanceSq <= lampDistanceSq;
+    lamp.light.visible = visible;
+    lamp.mesh.visible = visible;
+    lamp.rope.visible = visible;
+    lamp.shell.visible = visible;
+    lamp.innerCone.visible = visible;
+    lamp.glow.visible = visible;
+    lamp.floorPool.visible = visible;
+    if (visible) nearby.push({ lamp, distanceSq });
+  }
+
+  nearby.sort((a, b) => a.distanceSq - b.distanceSq);
+  for (let index = 0; index < activeLampLights.length; index += 1) {
+    const pooled = activeLampLights[index];
+    const entry = nearby[index];
+    if (!entry) {
+      pooled.light.intensity = 0;
+      continue;
+    }
+    const source = entry.lamp.light;
+    pooled.light.position.copy(source.position);
+    pooled.target.position.set(source.position.x, source.position.y - 4, source.position.z);
+    pooled.light.color.copy(source.color);
+    pooled.light.intensity = source.intensity;
+    pooled.light.distance = source.distance;
+    pooled.light.angle = source.angle;
+    pooled.light.penumbra = source.penumbra;
+    pooled.light.decay = source.decay;
+    pooled.target.updateMatrixWorld();
+  }
+}
 function isInsideArena(x, z, margin = 0) {
   // Return true only while the player's center is inside the arena radius.
   // Margin defaults to 0 so we only start falling after crossing the edge.
@@ -128,6 +450,48 @@ function getNearbyWalls(x, z, radius = 0) {
   return nearby;
 }
 
+function segmentIntersectsWallBounds(x1, z1, x2, z2, wall) {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  let tMin = 0;
+  let tMax = 1;
+  for (const [origin, delta, min, max] of [
+    [x1, dx, wall.minX, wall.maxX],
+    [z1, dz, wall.minZ, wall.maxZ],
+  ]) {
+    if (Math.abs(delta) < 1e-8) {
+      if (origin < min || origin > max) return false;
+      continue;
+    }
+    const inverse = 1 / delta;
+    let near = (min - origin) * inverse;
+    let far = (max - origin) * inverse;
+    if (near > far) [near, far] = [far, near];
+    tMin = Math.max(tMin, near);
+    tMax = Math.min(tMax, far);
+    if (tMin > tMax) return false;
+  }
+  return tMax >= 0 && tMin <= 1;
+}
+
+function isWallBetween(x1, z1, x2, z2) {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const distance = Math.hypot(dx, dz);
+  const steps = Math.max(1, Math.ceil(distance / (WALL_HASH_CELL_SIZE * 0.5)));
+  const candidates = new Set();
+  for (let step = 0; step <= steps; step += 1) {
+    const ratio = step / steps;
+    const cellX = Math.floor((x1 + dx * ratio) / WALL_HASH_CELL_SIZE);
+    const cellZ = Math.floor((z1 + dz * ratio) / WALL_HASH_CELL_SIZE);
+    for (const wall of wallSpatialHash.get(`${cellX}:${cellZ}`) || []) candidates.add(wall);
+  }
+  for (const wall of candidates) {
+    if (segmentIntersectsWallBounds(x1, z1, x2, z2, wall)) return true;
+  }
+  return false;
+}
+
 function createWall(
   x,
   y,
@@ -149,7 +513,6 @@ function createWall(
   wall.castShadow = true;
   wall.receiveShadow = true;
   wall.userData.isWall = true;
-  scene.add(wall);
   levelGroup.add(wall);
   wallMeshes.push(wall);
 
@@ -171,8 +534,87 @@ function createWall(
   return wall;
 }
 
+function mergeWallMeshes() {
+  if (wallMeshes.length < 2) return wallMeshes[0] ?? null;
+
+  const transformed = [];
+  let vertexCount = 0;
+  for (const wall of wallMeshes) {
+    wall.updateMatrix();
+    const geometry = wall.geometry.index
+      ? wall.geometry.toNonIndexed()
+      : wall.geometry.clone();
+    geometry.applyMatrix4(wall.matrix);
+    transformed.push(geometry);
+    vertexCount += geometry.attributes.position.count;
+  }
+
+  const positions = new Float32Array(vertexCount * 3);
+  const normals = new Float32Array(vertexCount * 3);
+  const uvs = new Float32Array(vertexCount * 2);
+  let positionOffset = 0;
+  let normalOffset = 0;
+  let uvOffset = 0;
+  for (const geometry of transformed) {
+    positions.set(geometry.attributes.position.array, positionOffset);
+    normals.set(geometry.attributes.normal.array, normalOffset);
+    uvs.set(geometry.attributes.uv.array, uvOffset);
+    positionOffset += geometry.attributes.position.array.length;
+    normalOffset += geometry.attributes.normal.array.length;
+    uvOffset += geometry.attributes.uv.array.length;
+    geometry.dispose();
+  }
+
+  const mergedGeometry = new THREE.BufferGeometry();
+  mergedGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  mergedGeometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  mergedGeometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  mergedGeometry.computeBoundingBox();
+  mergedGeometry.computeBoundingSphere();
+
+  for (const wall of wallMeshes) {
+    levelGroup.remove(wall);
+    wall.geometry.dispose();
+  }
+  wallMeshes.length = 0;
+
+  const mergedWall = new THREE.Mesh(mergedGeometry, sharedWallMaterial);
+  mergedWall.castShadow = true;
+  mergedWall.receiveShadow = true;
+  mergedWall.userData.isWall = true;
+  mergedWall.userData.mergedWallCount = transformed.length;
+  levelGroup.add(mergedWall);
+  wallMeshes.push(mergedWall);
+  return mergedWall;
+}
+
 // Lamps (spotlights) support
 const lamps = [];
+const ACTIVE_LAMP_LIGHT_COUNT = 4;
+const activeLampLights = Array.from({ length: ACTIVE_LAMP_LIGHT_COUNT }, () => {
+  const light = new THREE.SpotLight(0xfff4c2, 0, 12, Math.PI / 5, 0.4, 2);
+  const target = new THREE.Object3D();
+  light.castShadow = false;
+  light.target = target;
+  scene.add(light);
+  scene.add(target);
+  return { light, target };
+});
+window.activeLampLights = activeLampLights;
+
+const lampFloorGlowCanvas = document.createElement("canvas");
+lampFloorGlowCanvas.width = 128;
+lampFloorGlowCanvas.height = 128;
+const lampFloorGlowContext = lampFloorGlowCanvas.getContext("2d");
+const lampFloorGlowGradient = lampFloorGlowContext.createRadialGradient(64, 64, 0, 64, 64, 64);
+lampFloorGlowGradient.addColorStop(0, "rgba(255,255,255,0.95)");
+lampFloorGlowGradient.addColorStop(0.35, "rgba(255,255,255,0.55)");
+lampFloorGlowGradient.addColorStop(1, "rgba(255,255,255,0)");
+lampFloorGlowContext.fillStyle = lampFloorGlowGradient;
+lampFloorGlowContext.fillRect(0, 0, 128, 128);
+const lampFloorGlowTexture = new THREE.CanvasTexture(lampFloorGlowCanvas);
+lampFloorGlowTexture.minFilter = THREE.LinearFilter;
+lampFloorGlowTexture.magFilter = THREE.LinearFilter;
 
 function createLamp(x, y, z, opts = {}) {
   const color = opts.color ?? 0xfff4c2;
@@ -181,8 +623,9 @@ function createLamp(x, y, z, opts = {}) {
   const angle = opts.angle ?? Math.PI / 6;
   const penumbra = opts.penumbra ?? 0.4;
 
-  // 🔥 КОНТРОЛЬ ТЕНЕЙ: только первые 2 лампы
-  const castShadow = opts.castShadow ?? lampCounter < 2;
+  // Dynamic lamp shadows force expensive shadow-map refreshes while walking.
+  // Fixtures keep emissive geometry; a fixed light pool handles illumination.
+  const castShadow = false;
   lampCounter++;
 
   const spot = new THREE.SpotLight(
@@ -194,19 +637,10 @@ function createLamp(x, y, z, opts = {}) {
     2,
   );
   spot.position.set(x, y, z);
-  spot.castShadow = castShadow;
-
-  if (castShadow) {
-    spot.shadow.mapSize.width = 512;
-    spot.shadow.mapSize.height = 512;
-    spot.shadow.camera.near = 0.1;
-    spot.shadow.camera.far = distance + 10;
-    spot.shadow.bias = -0.002;
-  }
+  spot.castShadow = false;
 
   const target = new THREE.Object3D();
   target.position.set(x, y - 4, z);
-  scene.add(target);
   spot.target = target;
 
   // tiny bulb at the lamp point
@@ -215,6 +649,7 @@ function createLamp(x, y, z, opts = {}) {
     emissive: new THREE.Color(color),
     emissiveIntensity: 8,
     roughness: 0.4,
+    fog: false,
   });
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 8), lampMat);
   const lampY = y - 0.15;
@@ -224,17 +659,39 @@ function createLamp(x, y, z, opts = {}) {
 
   // thin rope anchored to the top of the cone
   const ropeStart = new THREE.Vector3(x, lampY + 2, z);
-  const ropeEnd = new THREE.Vector3(x, 100, z);
-  const ropeGeometry = new THREE.BufferGeometry().setFromPoints([
-    ropeStart,
-    ropeEnd,
-  ]);
-  const ropeMaterial = new THREE.LineBasicMaterial({
-    color: 0xe8dcc1,
+  const ropeEnd = new THREE.Vector3(x, lampY + 6.5, z);
+  const ropeLength = ropeEnd.y - ropeStart.y;
+  const ropeGeometry = new THREE.CylinderGeometry(0.022, 0.022, ropeLength, 6);
+  const ropeMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      ropeColor: { value: new THREE.Color(0xe8dcc1) },
+      ropeOpacity: { value: 0.9 },
+    },
+    vertexShader: `
+      varying vec2 vRopeUv;
+      void main() {
+        vRopeUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 ropeColor;
+      uniform float ropeOpacity;
+      varying vec2 vRopeUv;
+      void main() {
+        float fade = 1.0 - smoothstep(0.42, 1.0, vRopeUv.y);
+        float alpha = ropeOpacity * fade;
+        if (alpha < 0.01) discard;
+        gl_FragColor = vec4(ropeColor, alpha);
+      }
+    `,
     transparent: true,
-    opacity: 0.9,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
   });
-  const rope = new THREE.Line(ropeGeometry, ropeMaterial);
+  const rope = new THREE.Mesh(ropeGeometry, ropeMaterial);
+  rope.position.set(x, (ropeStart.y + ropeEnd.y) / 2, z);
   rope.renderOrder = 10;
 
   // outer shell: dark and matte, so the light stays inside the shade
@@ -255,6 +712,7 @@ function createLamp(x, y, z, opts = {}) {
     opacity: 0.96,
     depthWrite: false,
     side: THREE.BackSide,
+    fog: false,
   });
   const shell = new THREE.Mesh(coneGeo, shellMat);
   shell.position.set(x, lampY, z);
@@ -276,6 +734,7 @@ function createLamp(x, y, z, opts = {}) {
     opacity: 0.32,
     depthWrite: false,
     side: THREE.BackSide,
+    fog: false,
   });
   const innerCone = new THREE.Mesh(innerConeGeo, innerConeMat);
   innerCone.position.set(x, lampY - 0.05, z);
@@ -284,20 +743,38 @@ function createLamp(x, y, z, opts = {}) {
   const glowMat = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity: 1,
+    opacity: 0.92,
     depthWrite: false,
+    fog: false,
   });
-  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 6), glowMat);
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8), glowMat);
   glow.position.set(x, lampY, z);
   glow.renderOrder = 999;
+
+  const floorPoolMaterial = new THREE.MeshBasicMaterial({
+    color,
+    map: lampFloorGlowTexture,
+    transparent: true,
+    opacity: 0.2,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    fog: false,
+  });
+  const floorPool = new THREE.Mesh(
+    new THREE.CircleGeometry(2.35, 32),
+    floorPoolMaterial,
+  );
+  floorPool.rotation.x = -Math.PI / 2;
+  floorPool.position.set(x, 0.025, z);
+  floorPool.renderOrder = 2;
 
   levelGroup.add(lamp);
   levelGroup.add(rope);
   levelGroup.add(shell);
   levelGroup.add(innerCone);
   levelGroup.add(glow);
-  scene.add(spot);
-
+  levelGroup.add(floorPool);
   const lampObj = {
     light: spot,
     mesh: lamp,
@@ -307,7 +784,8 @@ function createLamp(x, y, z, opts = {}) {
     innerCone,
     cone: shell,
     glow,
-    castShadow, // ← запоминаем настройку
+    floorPool,
+    castShadow,
   };
   lamps.push(lampObj);
   return lampObj;
@@ -326,6 +804,7 @@ function setNightMode(on = true) {
       lp.light.intensity = lp.light.intensity ?? 2.4;
       if (lp.cone) lp.cone.visible = true;
       if (lp.glow) lp.glow.visible = true;
+      if (lp.floorPool) lp.floorPool.visible = true;
     }
   } else {
     scene.background = new THREE.Color(0x87ceeb);
@@ -335,7 +814,12 @@ function setNightMode(on = true) {
       lp.light.intensity = 0.0;
       if (lp.cone) lp.cone.visible = false;
       if (lp.glow) lp.glow.visible = false;
+      if (lp.floorPool) lp.floorPool.visible = false;
     }
+  }
+  lastVisibilityCell = "";
+  if (!on) {
+    for (const pooled of activeLampLights) pooled.light.intensity = 0;
   }
 }
 
@@ -366,8 +850,21 @@ function buildMazeFromAsciiMap(rows, options = {}) {
   const wallColor = options.wallColor ?? 0x8b5a2b;
   const rowCount = rows.length;
   const colCount = Math.max(...rows.map((row) => row.length));
+  const occupiedCells = rows.flatMap((row, rowIndex) =>
+    [...row].map((cell, colIndex) => ({ cell, rowIndex, colIndex })).filter(({ cell }) => cell !== "."),
+  );
+  const occupied = {
+    minRow: Math.min(...occupiedCells.map(({ rowIndex }) => rowIndex)),
+    maxRow: Math.max(...occupiedCells.map(({ rowIndex }) => rowIndex)),
+    minCol: Math.min(...occupiedCells.map(({ colIndex }) => colIndex)),
+    maxCol: Math.max(...occupiedCells.map(({ colIndex }) => colIndex)),
+  };
   const originX = -((colCount - 1) * cellSize) / 2;
   const originZ = -((rowCount - 1) * cellSize) / 2;
+  levelGrid.originX = originX;
+  levelGrid.originZ = originZ;
+  levelGrid.cellSize = cellSize;
+  levelGrid.active = true;
 
   worldWalls.length = 0;
 
@@ -398,21 +895,30 @@ function buildMazeFromAsciiMap(rows, options = {}) {
         });
       } else if (cell === "S") {
         spawn = { x, y: PLAYER_HEIGHT, z };
+      } else if (cell === "T") {
+        teleporters.push({ x, z, radius: options.teleportRadius ?? cellSize * 0.7 });
+      } else if (cell === ",") {
+        openSkyCells.add(`${rowIndex}:${colIndex}`);
       }
     }
   }
 
   setMazeBounds(
-    originX - cellSize / 2,
-    originX + (colCount - 1) * cellSize + cellSize / 2,
-    originZ - cellSize / 2,
-    originZ + (rowCount - 1) * cellSize + cellSize / 2,
+    originX + (occupied.minCol - 1) * cellSize,
+    originX + (occupied.maxCol + 1) * cellSize,
+    originZ + (occupied.minRow - 1) * cellSize,
+    originZ + (occupied.maxRow + 1) * cellSize,
   );
+
+  buildUpperFog(wallHeight);
+  mergeWallMeshes();
+  addNarrativeContent(options.narrative);
 
   return spawn;
 }
 // Добавляем в clearMaze:
 function clearMaze() {
+  clearUpperFog();
   for (const mesh of wallMeshes) {
     levelGroup.remove(mesh);
     mesh.geometry.dispose();
@@ -421,31 +927,60 @@ function clearMaze() {
   wallMeshes.length = 0;
   worldWalls.length = 0;
   wallSpatialHash.clear();
+  for (const billboard of billboards) {
+    levelGroup.remove(billboard);
+    billboard.material.map?.dispose();
+    billboard.material.dispose();
+  }
+  billboards.length = 0;
+  teleporters.length = 0;
+  openSkyCells.clear();
+  levelGrid.active = false;
+  lastVisibilityCell = "";
   mazeBounds.active = false;
 
   // 🔥 ОЧИЩАЕМ ЛАМПЫ
   for (const lamp of lamps) {
     scene.remove(lamp.light);
     scene.remove(lamp.target);
-    for (const object of [lamp.mesh, lamp.rope, lamp.shell, lamp.innerCone, lamp.glow]) {
+    for (const object of [
+      lamp.mesh,
+      lamp.rope,
+      lamp.shell,
+      lamp.innerCone,
+      lamp.glow,
+      lamp.floorPool,
+    ]) {
       levelGroup.remove(object);
       object.geometry.dispose();
       object.material.dispose();
     }
   }
   lamps.length = 0;
-  lampCounter = 0; // ← сбрасываем счетчик
+  lampCounter = 0;
+  for (const pooled of activeLampLights) pooled.light.intensity = 0;
 }
 
 window.createWall = createWall;
+window.scene = scene;
+window.camera = camera;
 window.buildMazeFromAsciiMap = buildMazeFromAsciiMap;
 window.clearMaze = clearMaze;
 window.setMazeBounds = setMazeBounds;
 window.worldWalls = worldWalls;
 window.getNearbyWalls = getNearbyWalls;
+window.isWallBetween = isWallBetween;
 window.mazeBounds = mazeBounds;
 window.wallMeshes = wallMeshes;
 window.levelGroup = levelGroup;
 window.LEVEL_CELL_SIZE = LEVEL_CELL_SIZE;
 window.ARENA_RADIUS = ARENA_RADIUS;
 window.isInsideArena = isInsideArena;
+window.isInsideMaze = isInsideMaze;
+window.isOpenSkyAt = isOpenSkyAt;
+window.updateMazeAtmosphere = updateMazeAtmosphere;
+window.setTeleportFog = setTeleportFog;
+window.beginTeleportFogReveal = beginTeleportFogReveal;
+window.updateRenderVisibility = updateRenderVisibility;
+window.teleporters = teleporters;
+window.addNarrativeContent = addNarrativeContent;

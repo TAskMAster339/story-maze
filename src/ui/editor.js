@@ -33,11 +33,12 @@ const editorCloseBtn = editorOverlay.querySelector(".editor-close");
 const editorCopyBtn = editorOverlay.querySelector(".editor-copy");
 
 const brushButtons = [];
-const brushOrder = ["#", "L", ".", "S"];
+const brushOrder = ["#", "L", ".", ",", "S"];
 const brushLabels = {
   "#": "Wall",
   L: "Lamp",
   ".": "Erase",
+  ",": "Open sky",
   S: "Spawn",
 };
 
@@ -264,7 +265,7 @@ editorCopyBtn.addEventListener("click", async () => {
 editorExport.addEventListener("input", () => {
   const lines = editorExport.value
     .split(/\r?\n/)
-    .map((line) => line.replace(/[^#LS.]/g, ".").replace(/\|/g, "#"));
+    .map((line) => line.replace(/[^#LST.,]/g, ".").replace(/\|/g, "#"));
 
   if (!lines.length) {
     return;

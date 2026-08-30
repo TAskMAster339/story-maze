@@ -96,6 +96,16 @@ canvas {
     display: none !important;
 }
 
+#teleportFadeOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    background: #020205;
+    opacity: 0;
+    will-change: opacity;
+}
+
 #glareOverlay {
     position: fixed;
     inset: 0;

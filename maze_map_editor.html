@@ -18,6 +18,8 @@
     --grid: #c9c9c3;
     --lamp: #ffd34d;
     --spawn: #43c77a;
+    --open-sky: #4fc3f7;
+    --teleport: #b26cff;
   }
 
   * { box-sizing: border-box; }
@@ -117,6 +119,8 @@
   .empty-s { background: var(--empty); color: #333; }
   .lamp-s { background: var(--lamp); color: #5d4a00; }
   .spawn-s { background: var(--spawn); color: white; }
+  .sky-s { background: var(--open-sky); color: #072b3b; }
+  .teleport-s { background: var(--teleport); color: white; }
 
   .row {
     display: flex;
@@ -155,6 +159,16 @@
     color: var(--muted);
     margin-top: 8px;
   }
+
+  .import-status {
+    min-height: 18px;
+    margin-top: 7px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .import-status.success { color: #72d99b; }
+  .import-status.error { color: #ff8c9b; }
 
   .stat {
     display: grid;
@@ -245,8 +259,25 @@
   }
 
   @media (max-width: 1050px) {
-    .app { grid-template-columns: 230px 1fr; }
-    .rightbar { display: none; }
+    body { overflow: auto; }
+    .app {
+      height: auto;
+      min-height: 100vh;
+      grid-template-columns: 230px minmax(420px, 1fr);
+    }
+    .canvas-wrap { min-height: 620px; }
+    .rightbar {
+      display: block;
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--border);
+      border-left: 0;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .app { display: block; }
+    .canvas-wrap { height: 65vh; min-height: 480px; }
+    .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   }
 </style>
 </head>
@@ -262,6 +293,8 @@
       <button class="tool" data-tool="."><span class="tool-symbol empty-s">.</span>Пусто</button>
       <button class="tool" data-tool="L"><span class="tool-symbol lamp-s">L</span>Лампа</button>
       <button class="tool" data-tool="S"><span class="tool-symbol spawn-s">S</span>Спавн</button>
+      <button class="tool" data-tool=","><span class="tool-symbol sky-s">,</span>Открытое небо</button>
+      <button class="tool" data-tool="T"><span class="tool-symbol teleport-s">T</span>Телепорт</button>
     </div>
 
     <h2>Размер карты</h2>
@@ -294,8 +327,8 @@
     <input id="lampStep" type="number" min="1" max="1000" value="10">
     <button id="autoLampBtn" style="width:100%;margin-top:7px">Расставить L через N клеток</button>
     <div class="hint">
-      Автоматическая расстановка идёт по выбранному маршруту: клетки с точками учитываются как проходимые.
-      Уже существующие L сохраняются.
+      Маршрут проходит через все клетки, кроме стен. Новые лампы ставятся только на <b>.</b>;
+      существующие L и специальные клетки сохраняются.
     </div>
 
     <h2>Масштаб</h2>
@@ -314,6 +347,7 @@
       Ctrl+Z / Ctrl+Y — undo / redo<br>
       1 — стена, 2 — пусто<br>
       3 — лампа, 4 — спавн<br>
+      5 — открытое небо, 6 — телепорт<br>
       E — ластик (пусто)
     </div>
 
@@ -323,6 +357,8 @@
       <div>Лампы <b id="lampCount">0</b></div>
       <div>Пустые <b id="emptyCount">0</b></div>
       <div>Спавн <b id="spawnCount">0</b></div>
+      <div>Открытое небо <b id="skyCount">0</b></div>
+      <div>Телепорты <b id="teleportCount">0</b></div>
     </div>
   </aside>
 
@@ -336,15 +372,16 @@
 
   <aside class="sidebar rightbar">
     <h1>Импорт / экспорт</h1>
-    <div class="subtitle">Можно работать с готовым MAZE_MAP или с JSON-файлом.</div>
+    <div class="subtitle">Поддерживаются MAZE_MAP, JSON, TXT и JS-файлы текущего уровня.</div>
 
     <h2>ASCII-карта</h2>
-    <textarea id="ascii" spellcheck="false" placeholder='["###...", "#..L.", "#..S."]'></textarea>
+    <textarea id="ascii" spellcheck="false" placeholder='["###...", "#.,L.", "#S.T."]'></textarea>
 
     <div class="row" style="margin-top:7px">
       <button id="loadAsciiBtn" class="primary">Загрузить в редактор</button>
       <button id="copyAsciiBtn">Копировать</button>
     </div>
+    <div id="importStatus" class="import-status" role="status" aria-live="polite"></div>
 
     <h2>Экспорт JS</h2>
     <textarea id="jsOutput" readonly spellcheck="false"></textarea>
@@ -354,6 +391,7 @@
     </div>
 
     <h2>Файл</h2>
+    <button id="loadCurrentBtn" style="width:100%;margin-bottom:7px">Загрузить текущий maze-level2.js</button>
     <div class="row">
       <button id="downloadJsonBtn">Экспорт JSON</button>
       <label class="file-label" for="fileInput">Импорт JSON / TXT</label>
@@ -364,8 +402,10 @@
     <div class="hint">
       <b>#</b> — стена<br>
       <b>.</b> — пустота<br>
+      <b>,</b> — открытое небо без тумана<br>
       <b>L</b> — лампа<br>
-      <b>S</b> — единственная точка спавна
+      <b>S</b> — единственная точка спавна<br>
+      <b>T</b> — телепорт к точке спавна
     </div>
 
     <h2>Сохранение</h2>
@@ -387,6 +427,12 @@
   const colsInput = document.getElementById('cols');
   const ascii = document.getElementById('ascii');
   const jsOutput = document.getElementById('jsOutput');
+  const importStatus = document.getElementById('importStatus');
+
+  function showImportStatus(message = '', type = '') {
+    importStatus.textContent = message;
+    importStatus.className = `import-status${type ? ` ${type}` : ''}`;
+  }
 
   let rows = 50;
   let cols = 100;
@@ -557,6 +603,13 @@
         if (v === '#') {
           ctx.fillStyle = '#6b4a2e';
           ctx.fillRect(px, py, cellSize, cellSize);
+        } else if (v === ',') {
+          ctx.fillStyle = '#10364b';
+          ctx.fillRect(px, py, cellSize, cellSize);
+          ctx.fillStyle = '#80d8ff';
+          ctx.beginPath();
+          ctx.arc(px + cellSize / 2, py + cellSize / 2, Math.max(1.5, cellSize * .12), 0, Math.PI * 2);
+          ctx.fill();
         } else if (v === 'L') {
           ctx.fillStyle = '#f5f5f2';
           ctx.fillRect(px, py, cellSize, cellSize);
@@ -573,6 +626,17 @@
           ctx.fillStyle = '#43c77a';
           ctx.beginPath();
           ctx.arc(px + cellSize / 2, py + cellSize / 2, Math.max(3, cellSize * .32), 0, Math.PI * 2);
+          ctx.fill();
+        } else if (v === 'T') {
+          ctx.fillStyle = '#f5f5f2';
+          ctx.fillRect(px, py, cellSize, cellSize);
+          ctx.fillStyle = '#9a4dff';
+          ctx.beginPath();
+          ctx.moveTo(px + cellSize / 2, py + cellSize * .16);
+          ctx.lineTo(px + cellSize * .84, py + cellSize / 2);
+          ctx.lineTo(px + cellSize / 2, py + cellSize * .84);
+          ctx.lineTo(px + cellSize * .16, py + cellSize / 2);
+          ctx.closePath();
           ctx.fill();
         }
 
@@ -596,19 +660,23 @@
   }
 
   function updateStats() {
-    let wall = 0, lamp = 0, empty = 0, spawn = 0;
+    let wall = 0, lamp = 0, empty = 0, spawn = 0, sky = 0, teleport = 0;
     for (const row of map) {
       for (const c of row) {
         if (c === '#') wall++;
         else if (c === 'L') lamp++;
         else if (c === 'S') spawn++;
-        else empty++;
+        else if (c === ',') sky++;
+        else if (c === 'T') teleport++;
+        else if (c === '.') empty++;
       }
     }
     document.getElementById('wallCount').textContent = wall;
     document.getElementById('lampCount').textContent = lamp;
     document.getElementById('emptyCount').textContent = empty;
     document.getElementById('spawnCount').textContent = spawn;
+    document.getElementById('skyCount').textContent = sky;
+    document.getElementById('teleportCount').textContent = teleport;
   }
 
   function mapToStrings() {
@@ -625,19 +693,27 @@
 window.levelMap = MAZE_MAP;
 window.spawnPoint = null;
 
-function rebuildLevelFromMap() {
-  const spawn = buildMazeFromAsciiMap(window.levelMap, {
+function rebuildLevelFromMap(buildOptions = {}) {
+  if (window.levelUtils) {
+    const inspection = window.levelUtils.inspect(window.levelMap);
+    if (!inspection.valid) throw new Error(inspection.errors.join(" "));
+    window.levelMap = inspection.map;
+  }
+
+  const levelOptions = {
     cellSize: LEVEL_CELL_SIZE,
     wallHeight: LEVEL_CELL_SIZE * 3,
     wallDepth: 0.5,
     wallColor: 0x8b5a2b,
-  });
+    ...buildOptions,
+  };
+  if (typeof NARRATIVE !== "undefined") levelOptions.narrative = NARRATIVE;
 
+  const spawn = buildMazeFromAsciiMap(window.levelMap, levelOptions);
   if (spawn) {
     window.spawnPoint = spawn;
     camera.position.set(spawn.x, spawn.y, spawn.z);
   }
-
   return spawn;
 }
 
@@ -646,6 +722,10 @@ rebuildLevelFromMap();
 
 if (typeof window.setNightMode === "function") {
   window.setNightMode(true);
+  if (window.spawnPoint && typeof window.updateRenderVisibility === "function") {
+    window.updateRenderVisibility(window.spawnPoint.x, window.spawnPoint.z);
+  }
+  renderer.compile(scene, camera);
 }`;
   }
 
@@ -670,35 +750,45 @@ if (typeof window.setNightMode === "function") {
     render();
   }
 
-  function normalizeImported(input) {
-    input = input.trim();
+  function normalizeImported(rawInput) {
+    const input = String(rawInput ?? '').replace(/^\uFEFF/, '').trim();
+    if (!input) throw new Error('Нет данных для импорта.');
 
-    // JSON array
+    // JSON array or an editor export object.
     try {
       const parsed = JSON.parse(input);
       if (Array.isArray(parsed)) return parsed;
       if (parsed && Array.isArray(parsed.map)) return parsed.map;
+      if (parsed && Array.isArray(parsed.levelMap)) return parsed.levelMap;
     } catch (_) {}
 
-    // Extract the first JS array assigned to MAZE_MAP
-    const match = input.match(/MAZE_MAP\\s*=\\s*(\\[[\\s\\S]*?\\])\\s*;/);
-    if (match) {
+    // Current/legacy JavaScript level files. JSON is preferred, but quoted
+    // ASCII rows also support single-quoted hand-written maps without eval().
+    const assignments = [
+      /(?:const|let|var)\s+MAZE_MAP\s*=\s*(\[[\s\S]*?\])\s*;/,
+      /window\.levelMap\s*=\s*(\[[\s\S]*?\])\s*;/,
+    ];
+    for (const pattern of assignments) {
+      const match = input.match(pattern);
+      if (!match) continue;
       try {
         const parsed = JSON.parse(match[1]);
         if (Array.isArray(parsed)) return parsed;
-      } catch (_) {}
+      } catch (_) {
+        const quotedRows = [...match[1].matchAll(/["']([#.,LST|]+)["']/g)]
+          .map((entry) => entry[1]);
+        if (quotedRows.length) return quotedRows;
+      }
     }
 
-    // Fallback: lines such as #...L...
+    // Plain ASCII map, one row per line.
     const lines = input
-      .split(/\\r?\\n/)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .filter(s => !s.startsWith('const ') && !s.startsWith('window.') && !s.startsWith('//'));
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length && lines.every((line) => /^[#.,LST|]+$/.test(line))) return lines;
 
-    if (lines.length && lines.every(s => /^[.#LS]+$/.test(s))) return lines;
-
-    throw new Error('Не удалось распознать карту. Ожидается JSON-массив строк или MAZE_MAP.');
+    throw new Error('Не удалось распознать карту. Ожидается MAZE_MAP, JSON или строки из символов # . , L S T.');
   }
 
   function loadMapStrings(strings) {
@@ -706,27 +796,32 @@ if (typeof window.setNightMode === "function") {
       throw new Error('Пустая карта.');
     }
 
-    const cleaned = strings.map(s => String(s));
-    const width = cleaned[0].length;
+    const sourceRows = strings.map((row) =>
+      Array.isArray(row) ? row.join('') : String(row ?? ''),
+    );
+    const width = Math.max(...sourceRows.map((row) => row.length), 1);
+    const allowed = new Set(['#', '.', ',', 'L', 'S', 'T']);
+    const cleaned = sourceRows.map((row) => {
+      const normalized = [...row.replaceAll('|', '#')]
+        .map((cell) => allowed.has(cell) ? cell : '.')
+        .join('');
+      return normalized.padEnd(width, '.');
+    });
 
-    if (!width) throw new Error('У карты нулевая ширина.');
-    if (!cleaned.every(s => s.length === width)) {
-      throw new Error('Все строки карты должны быть одинаковой длины.');
-    }
-    if (!cleaned.every(s => /^[.#LS]+$/.test(s))) {
-      throw new Error('Разрешены только символы # . L S.');
-    }
-
-    const spawnCount = cleaned.reduce((n, row) => n + [...row].filter(c => c === 'S').length, 0);
+    const spawnCount = cleaned.reduce(
+      (count, row) => count + [...row].filter((cell) => cell === 'S').length,
+      0,
+    );
     if (spawnCount > 1) throw new Error('В карте может быть только один S.');
 
     pushHistory();
     rows = cleaned.length;
     cols = width;
-    map = cleaned.map(s => [...s]);
+    map = cleaned.map((row) => [...row]);
     syncDimensions();
     fitToScreen();
     render();
+    showImportStatus(`Карта загружена: ${cols} × ${rows}.`, 'success');
   }
 
   function copyText(text) {
@@ -891,7 +986,7 @@ if (typeof window.setNightMode === "function") {
       return;
     }
 
-    const keyTools = {'1':'#', '2':'.', '3':'L', '4':'S', 'e':'.'};
+    const keyTools = {'1':'#', '2':'.', '3':'L', '4':'S', '5':',', '6':'T', 'e':'.'};
     const key = e.key.toLowerCase();
     if (keyTools[key]) {
       tool = keyTools[key];
@@ -939,7 +1034,7 @@ if (typeof window.setNightMode === "function") {
     try {
       loadMapStrings(normalizeImported(ascii.value));
     } catch (err) {
-      alert(err.message);
+      showImportStatus(err.message, 'error');
     }
   };
 
@@ -955,12 +1050,28 @@ if (typeof window.setNightMode === "function") {
 
   document.getElementById('downloadJsonBtn').onclick = () => {
     const blob = new Blob([JSON.stringify({
-      version: 1,
+      version: 2,
       rows,
       cols,
+      symbols: ['#', '.', ',', 'L', 'S', 'T'],
       map: mapToStrings()
     }, null, 2)], {type: 'application/json;charset=utf-8'});
     downloadBlob(blob, 'maze-map.json');
+  };
+
+  document.getElementById('loadCurrentBtn').onclick = async () => {
+    showImportStatus('Загрузка текущего уровня…');
+    try {
+      const response = await fetch('src/world/maze-level2.js', {cache: 'no-store'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      loadMapStrings(normalizeImported(await response.text()));
+    } catch (err) {
+      showImportStatus(
+        'Не удалось загрузить текущий уровень: ' + err.message +
+        '. При открытии через file:// выберите maze-level2.js вручную.',
+        'error',
+      );
+    }
   };
 
   document.getElementById('fileInput').addEventListener('change', async e => {
@@ -968,16 +1079,9 @@ if (typeof window.setNightMode === "function") {
     if (!file) return;
     try {
       const text = await file.text();
-      let strings;
-      if (file.name.toLowerCase().endsWith('.json')) {
-        const parsed = JSON.parse(text);
-        strings = Array.isArray(parsed) ? parsed : parsed.map;
-      } else {
-        strings = normalizeImported(text);
-      }
-      loadMapStrings(strings);
+      loadMapStrings(normalizeImported(text));
     } catch (err) {
-      alert('Ошибка импорта: ' + err.message);
+      showImportStatus('Ошибка импорта: ' + err.message, 'error');
     }
     e.target.value = '';
   });
@@ -995,7 +1099,7 @@ if (typeof window.setNightMode === "function") {
       if (!data?.map) throw new Error('Сохранённой карты нет.');
       loadMapStrings(data.map);
     } catch (err) {
-      alert(err.message);
+      showImportStatus(err.message, 'error');
     }
   };
 

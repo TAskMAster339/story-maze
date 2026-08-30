@@ -1,4 +1,5 @@
-let yaw = -89.55;
+const SPAWN_YAW = THREE.MathUtils.degToRad(-89.55);
+let yaw = SPAWN_YAW;
 let pitch = 0;
 
 const moveState = {
@@ -13,10 +14,128 @@ const startBtn = document.getElementById("startBtn");
 const glareOverlay = document.createElement("div");
 glareOverlay.id = "glareOverlay";
 document.body.appendChild(glareOverlay);
+const teleportFadeOverlay = document.createElement("div");
+teleportFadeOverlay.id = "teleportFadeOverlay";
+document.body.appendChild(teleportFadeOverlay);
 const fallState = {
   active: false,
   velocity: 0,
 };
+let teleportCooldown = 0;
+const teleportTransition = {
+  phase: "idle",
+  elapsed: 0,
+};
+const TELEPORT_DARKEN_SECONDS = 0.45;
+const TELEPORT_HOLD_SECONDS = 0.12;
+const TELEPORT_REVEAL_SECONDS = 1.6;
+
+function smoothStep(progress) {
+  const value = THREE.MathUtils.clamp(progress, 0, 1);
+  return value * value * (3 - 2 * value);
+}
+
+function moveToTeleportSpawn() {
+  const spawn = getSpawnPoint();
+  const leftOffset = 1.35;
+  const leftX = -Math.sin(SPAWN_YAW + Math.PI / 2);
+  const leftZ = -Math.cos(SPAWN_YAW + Math.PI / 2);
+  camera.position.set(
+    spawn.x + leftX * leftOffset,
+    spawn.y,
+    spawn.z + leftZ * leftOffset,
+  );
+  yaw = SPAWN_YAW;
+  pitch = 0;
+  camera.rotation.set(0, yaw, 0);
+  teleportCooldown = 1.5;
+  window.beginTeleportFogReveal?.();
+  window.updateRenderVisibility?.(camera.position.x, camera.position.z);
+}
+
+function startTeleportTransition() {
+  if (teleportTransition.phase !== "idle") return;
+  teleportTransition.phase = "darken";
+  teleportTransition.elapsed = 0;
+  teleportFadeOverlay.style.opacity = "0";
+  glareOverlay.style.opacity = "0";
+  window.setTeleportFog?.(1);
+}
+
+function updateTeleportTransition(dt) {
+  if (teleportTransition.phase === "idle") return false;
+  teleportTransition.elapsed += dt;
+  glareOverlay.style.opacity = "0";
+
+  if (teleportTransition.phase === "darken") {
+    const progress = teleportTransition.elapsed / TELEPORT_DARKEN_SECONDS;
+    teleportFadeOverlay.style.opacity = String(smoothStep(progress));
+    window.setTeleportFog?.(1);
+    if (progress >= 1) {
+      teleportFadeOverlay.style.opacity = "1";
+      moveToTeleportSpawn();
+      teleportTransition.phase = "hold";
+      teleportTransition.elapsed = 0;
+    }
+    return true;
+  }
+
+  if (teleportTransition.phase === "hold") {
+    teleportFadeOverlay.style.opacity = "1";
+    window.setTeleportFog?.(1);
+    if (teleportTransition.elapsed >= TELEPORT_HOLD_SECONDS) {
+      teleportTransition.phase = "reveal";
+      teleportTransition.elapsed = 0;
+    }
+    return true;
+  }
+
+  const progress = THREE.MathUtils.clamp(
+    teleportTransition.elapsed / TELEPORT_REVEAL_SECONDS,
+    0,
+    1,
+  );
+  const reveal = smoothStep(progress);
+  teleportFadeOverlay.style.opacity = String(1 - reveal);
+  window.setTeleportFog?.(THREE.MathUtils.lerp(1, 0.58, reveal));
+  if (progress >= 1) {
+    window.setTeleportFog?.(0);
+    teleportFadeOverlay.style.opacity = "0";
+    teleportTransition.phase = "idle";
+    teleportTransition.elapsed = 0;
+  }
+  return true;
+}
+
+function checkSeamlessTeleport(dt) {
+  teleportCooldown = Math.max(0, teleportCooldown - dt);
+  if (teleportTransition.phase !== "idle") return;
+  if (!Array.isArray(window.teleporters) || window.teleporters.length === 0) return;
+
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const point of window.teleporters) {
+    const distance = Math.hypot(camera.position.x - point.x, camera.position.z - point.z);
+    if (distance < nearestDistance) {
+      nearest = point;
+      nearestDistance = distance;
+    }
+  }
+
+  const approachDistance = 8;
+  const approachProgress = THREE.MathUtils.clamp(
+    (approachDistance - nearestDistance) / (approachDistance - nearest.radius),
+    0,
+    1,
+  );
+  const fogStrength = approachProgress > 0
+    ? 0.58 + (1 - 0.58) * approachProgress ** 2
+    : 0;
+  window.setTeleportFog?.(fogStrength);
+  if (teleportCooldown > 0 || nearestDistance >= nearest.radius) return;
+
+  startTeleportTransition();
+}
 
 function refreshStartOverlay() {
   overlay.style.display =
@@ -35,6 +154,7 @@ document.addEventListener("pointerlockchange", refreshStartOverlay);
 
 document.addEventListener("mousemove", (e) => {
   if (window.editorActive) return;
+  if (teleportTransition.phase !== "idle") return;
   if (document.pointerLockElement !== renderer.domElement) return;
 
   const { lookSensitivity, maxMouseDelta } = window.GAME_CONFIG.player;
@@ -106,7 +226,7 @@ function getSpawnPoint() {
 function respawnPlayer() {
   const spawn = getSpawnPoint();
   camera.position.set(spawn.x, spawn.y, spawn.z);
-  yaw = -89.55;
+  yaw = SPAWN_YAW;
   pitch = 0;
   camera.rotation.set(0, 0, 0);
   fallState.active = false;
@@ -174,7 +294,8 @@ function collidesAt(x, z) {
 }
 
 const clock = new THREE.Clock();
-const glareRaycaster = new THREE.Raycaster();
+const glareForward = new THREE.Vector3();
+const glareDelta = new THREE.Vector3();
 
 function updateMovement(dt) {
   // Do not block movement while falling: allow movement and look during fall.
@@ -229,6 +350,11 @@ function updateMovement(dt) {
     camera.position.z = nextZ;
   }
 
+  checkSeamlessTeleport(dt);
+  if (typeof window.updateMazeAtmosphere === "function") {
+    window.updateMazeAtmosphere(camera.position.x, camera.position.z, dt);
+  }
+
   if (
     typeof window.isInsideArena === "function" &&
     !window.isInsideArena(camera.position.x, camera.position.z)
@@ -243,6 +369,7 @@ function updateMovement(dt) {
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
+  const teleporting = updateTeleportTransition(dt);
 
   if (
     document.pointerLockElement === renderer.domElement &&
@@ -250,35 +377,44 @@ function animate() {
   ) {
     updateMovement(dt);
   } else {
+    if (teleporting) {
+      window.updateMazeAtmosphere?.(camera.position.x, camera.position.z, dt);
+    }
     emitDebugInfo(0, 0, 3.6, fallState.active);
   }
 
+  if (typeof window.updateRenderVisibility === "function") {
+    window.updateRenderVisibility(camera.position.x, camera.position.z, dt);
+  }
+
   // glare effect: when looking directly at the brightest lamp core, fade overlay in
-  // ВАШ СУЩЕСТВУЮЩИЙ КОД (оставляем как есть)
   let glareStrength = 0;
-  const forward = new THREE.Vector3();
-  camera.getWorldDirection(forward);
+  if (!teleporting) {
+    camera.getWorldDirection(glareForward);
 
-  // ДОБАВЛЯЕМ ЭТОТ БЛОК В ЦИКЛ for (const lamp of window.lamps || [])
-  for (const lamp of window.lamps || []) {
-    const lightPos = lamp.mesh ? lamp.mesh.position : lamp.light.position;
-    const delta = new THREE.Vector3(
-      lightPos.x - camera.position.x,
-      lightPos.y - camera.position.y,
-      lightPos.z - camera.position.z,
-    );
-    const distance = delta.length();
-    if (distance > 100) continue;
+    for (const lamp of window.lamps || []) {
+      if (lamp.mesh && !lamp.mesh.visible) continue;
+      const lightPos = lamp.mesh ? lamp.mesh.position : lamp.light.position;
+      glareDelta.set(
+        lightPos.x - camera.position.x,
+        lightPos.y - camera.position.y,
+        lightPos.z - camera.position.z,
+      );
+      const distance = glareDelta.length();
+      if (distance > 48 || distance < 1e-5) continue;
 
-    const dirToLamp = delta.normalize();
-    const dot = forward.dot(dirToLamp);
+      glareDelta.multiplyScalar(1 / distance);
+      const dot = glareForward.dot(glareDelta);
 
-    const mightGlare = dot > 0.96 || (distance < 3.0 && dot > 0.3);
-    if (!mightGlare) continue;
+      const mightGlare = dot > 0.96 || (distance < 3.0 && dot > 0.3);
+      if (!mightGlare) continue;
 
-    glareRaycaster.set(camera.position, dirToLamp);
-    const wallHits = glareRaycaster.intersectObjects(window.wallMeshes || [], false);
-    if (wallHits.length > 0 && wallHits[0].distance < distance - 0.1) continue;
+      if (window.isWallBetween?.(
+        camera.position.x,
+        camera.position.z,
+        lightPos.x,
+        lightPos.z,
+      )) continue;
 
     // 🔥 ОСЛЕПЛЕНИЕ ВСЕГО ЭКРАНА ПРИ БЛИЗОСТИ
     // Настройки (подберите под свой вкус)
@@ -286,7 +422,7 @@ function animate() {
     const BLIND_ANGLE = 0.3; // угол обзора (чем меньше, тем шире)
 
     // Если лампа близко и мы смотрим в её сторону
-    if (distance < BLIND_DISTANCE && dot > BLIND_ANGLE) {
+      if (distance < BLIND_DISTANCE && dot > BLIND_ANGLE) {
       // Сила ослепления: максимальная при distance=0
       const distanceFactor = Math.max(0, 1 - distance / BLIND_DISTANCE);
       // Насколько точно смотрим на лампу (от 0 до 1)
@@ -296,22 +432,23 @@ function animate() {
       const blindStrength = distanceFactor * 3.0 * lookFactor;
 
       // Добавляем к основному блику
-      glareStrength = Math.max(glareStrength, blindStrength);
-    }
+        glareStrength = Math.max(glareStrength, blindStrength);
+      }
 
     // СУЩЕСТВУЮЩИЙ БЛИК (оставляем)
-    if (dot > 0.96) {
-      glareStrength = Math.max(
-        glareStrength,
-        (dot - 0.96) * 40 + (1 - distance / 12) * 0.9,
-      );
+      if (dot > 0.96) {
+        glareStrength = Math.max(
+          glareStrength,
+          (dot - 0.96) * 40 + (1 - distance / 12) * 0.9,
+        );
+      }
     }
   }
 
   // 🔥 УВЕЛИЧИВАЕМ МАКСИМАЛЬНУЮ ПРОЗРАЧНОСТЬ (теперь до 3.0)
   glareOverlay.style.opacity = String(Math.min(1.0, glareStrength));
   // Always update fall after movement so player can still move/look while descending.
-  if (fallState.active) {
+  if (fallState.active && !teleporting) {
     updateFall(dt);
   }
 
@@ -320,6 +457,7 @@ function animate() {
 
 animate();
 refreshStartOverlay();
+window.teleportTransition = teleportTransition;
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
