@@ -8,6 +8,7 @@ debugOverlay.innerHTML = `
   <div class="debug-body">loading...</div>
 `;
 document.body.appendChild(debugOverlay);
+debugOverlay.hidden = !window.GAME_CONFIG.debug;
 
 const debugBody = debugOverlay.querySelector(".debug-body");
 const gizmoCanvas = debugOverlay.querySelector(".debug-gizmo");
@@ -106,10 +107,19 @@ function updateGizmo() {
   gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 
+let lastDebugRenderTime = 0;
+const DEBUG_RENDER_INTERVAL = 1000 / 20;
+
 function setDebugInfo(state) {
   if (!state) {
     return;
   }
+
+  const now = performance.now();
+  if (now - lastDebugRenderTime < DEBUG_RENDER_INTERVAL) {
+    return;
+  }
+  lastDebugRenderTime = now;
 
   const lines = [
     "DEBUG",
@@ -139,6 +149,10 @@ lampControls.innerHTML = `
     <div>Lamps</div>
     <button class="toggle-daynight" title="Toggle Day/Night">Day/Night</button>
   </div>
+  <label class="debug-level-row" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+    <span>Level</span>
+    <select class="debug-level-select" aria-label="Level"></select>
+  </label>
   <div class="debug-lamp-list" style="margin-top:6px; display:flex; gap:8px; align-items:center;">
     <button class="lamp-prev">◀</button>
     <span class="lamp-info">0</span>
@@ -165,9 +179,37 @@ const lampHelperToggle = lampControls.querySelector(".lamp-helper");
 const lampVolumetricToggle = lampControls.querySelector(".lamp-volumetric");
 const lampGlowToggle = lampControls.querySelector(".lamp-glow");
 const daynightBtn = lampControls.querySelector(".toggle-daynight");
+const levelSelect = lampControls.querySelector(".debug-level-select");
 
 let selectedLampIndex = 0;
 let currentHelper = null;
+
+function refreshLevelSelector() {
+  if (!levelSelect || !window.levelRegistry) return;
+  levelSelect.replaceChildren();
+  for (const level of window.levelRegistry.listLevels()) {
+    const option = document.createElement("option");
+    option.value = level.id;
+    option.textContent = level.name;
+    option.selected = level.id === window.levelRegistry.getActiveLevelId();
+    levelSelect.appendChild(option);
+  }
+}
+
+levelSelect?.addEventListener("change", () => {
+  if (typeof window.loadLevel !== "function") return;
+  try {
+    window.loadLevel(levelSelect.value);
+    selectedLampIndex = 0;
+    refreshLampInfo();
+    showHelperForSelected();
+  } catch (error) {
+    console.error(error);
+    refreshLevelSelector();
+  }
+});
+
+refreshLevelSelector();
 
 function refreshLampInfo() {
   const list = window.lamps || [];

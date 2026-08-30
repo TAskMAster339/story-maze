@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>Игрок — база</title>
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="src/ui/style.css" />
   </head>
   <body>
     <div id="overlay">
@@ -18,10 +18,12 @@
     <div id="crosshair"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="scene.js"></script>
-    <script src="maze-level2.js"></script>
-    <script src="debug.js"></script>
-    <script src="editor.js"></script>
-    <script src="player.js"></script>
+    <script src="src/core/game-config.js"></script>
+    <script src="src/render/texture-system.js"></script>
+    <script src="src/core/level-utils.js"></script>
+    <script src="src/render/scene.js"></script>
+    <script src="src/world/maze-level2.js"></script>
+    <script src="src/world/level-registry.js"></script>
+    <script src="src/core/runtime-loader.js"></script>
   </body>
 </html>

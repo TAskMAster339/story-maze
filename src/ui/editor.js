@@ -49,11 +49,7 @@ let editorHeight = 0;
 
 function getNormalizedLevelMap() {
   const sourceMap = window.levelMap || [];
-  const width = Math.max(...sourceMap.map((row) => row.length), 0);
-
-  return sourceMap.map((row) =>
-    row.padEnd(width, ".").replaceAll("|", "#").split(""),
-  );
+  return window.levelUtils.normalize(sourceMap).map((row) => row.split(""));
 }
 
 function updateExportText() {

@@ -12,8 +12,11 @@ camera.position.set(0, PLAYER_HEIGHT, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(
+  Math.min(window.devicePixelRatio || 1, window.GAME_CONFIG.render.maxPixelRatio),
+);
 document.body.appendChild(renderer.domElement);
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = window.GAME_CONFIG.render.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // свет — просто чтобы что-то было видно
@@ -27,15 +30,27 @@ scene.add(dir);
 const _dayLight = { hemi: 1.0, dir: 0.8 };
 const _nightLight = { hemi: 0.06, dir: 0.04 };
 
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = window.GAME_CONFIG.render.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // 🔥 ОГРАНИЧИВАЕМ КАЧЕСТВО ТЕНЕЙ ГЛОБАЛЬНО
 renderer.shadowMap.type = THREE.PCFShadowMap; // вместо PCFSoftShadowMap (быстрее)
 
 const ARENA_RADIUS = 36 * 8;
+const textureAnisotropy = Math.min(
+  renderer.capabilities.getMaxAnisotropy(),
+  window.GAME_CONFIG.render.maxAnisotropy,
+);
+const floorTexture = window.textureSystem.createFloorTexture({
+  anisotropy: textureAnisotropy,
+});
 const floor = new THREE.Mesh(
-  new THREE.CircleGeometry(ARENA_RADIUS, 96),
-  new THREE.MeshStandardMaterial({ color: 0x3a3a3a, side: THREE.DoubleSide }),
+  new THREE.CircleGeometry(ARENA_RADIUS, 64),
+  new THREE.MeshStandardMaterial({
+    color: 0x7b7b86,
+    map: floorTexture,
+    roughness: 0.92,
+    side: THREE.DoubleSide,
+  }),
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
@@ -58,6 +73,8 @@ const PLAYER_RADIUS = 0.35;
 const LEVEL_CELL_SIZE = 2.2;
 const worldWalls = [];
 const wallMeshes = [];
+const wallSpatialHash = new Map();
+const WALL_HASH_CELL_SIZE = LEVEL_CELL_SIZE * 2;
 const levelGroup = new THREE.Group();
 scene.add(levelGroup);
 const mazeBounds = {
@@ -75,8 +92,41 @@ function isInsideArena(x, z, margin = 0) {
 }
 
 const sharedWallMaterial = new THREE.MeshStandardMaterial({
-  color: 0x8b5a2b,
+  color: 0xb07b4c,
+  map: window.textureSystem.createWallTexture({
+    anisotropy: textureAnisotropy,
+  }),
+  roughness: 0.82,
 });
+let lampCounter = 0;
+
+function addWallToSpatialHash(bounds) {
+  const minCellX = Math.floor(bounds.minX / WALL_HASH_CELL_SIZE);
+  const maxCellX = Math.floor(bounds.maxX / WALL_HASH_CELL_SIZE);
+  const minCellZ = Math.floor(bounds.minZ / WALL_HASH_CELL_SIZE);
+  const maxCellZ = Math.floor(bounds.maxZ / WALL_HASH_CELL_SIZE);
+  for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      const key = `${cellX}:${cellZ}`;
+      if (!wallSpatialHash.has(key)) wallSpatialHash.set(key, []);
+      wallSpatialHash.get(key).push(bounds);
+    }
+  }
+}
+
+function getNearbyWalls(x, z, radius = 0) {
+  const nearby = new Set();
+  const minCellX = Math.floor((x - radius) / WALL_HASH_CELL_SIZE);
+  const maxCellX = Math.floor((x + radius) / WALL_HASH_CELL_SIZE);
+  const minCellZ = Math.floor((z - radius) / WALL_HASH_CELL_SIZE);
+  const maxCellZ = Math.floor((z + radius) / WALL_HASH_CELL_SIZE);
+  for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+      for (const wall of wallSpatialHash.get(`${cellX}:${cellZ}`) || []) nearby.add(wall);
+    }
+  }
+  return nearby;
+}
 
 function createWall(
   x,
@@ -88,10 +138,12 @@ function createWall(
   color = 0x8b5a2b,
   rotationY = 0,
 ) {
-  const wall = new THREE.Mesh(
-    new THREE.BoxGeometry(width, height, depth),
-    sharedWallMaterial,
-  );
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const uvScale = Math.max(width, depth) / LEVEL_CELL_SIZE;
+  for (let index = 0; index < geometry.attributes.uv.count; index += 1) {
+    geometry.attributes.uv.setX(index, geometry.attributes.uv.getX(index) * uvScale);
+  }
+  const wall = new THREE.Mesh(geometry, sharedWallMaterial);
   wall.position.set(x, y + height / 2, z);
   wall.rotation.y = rotationY;
   wall.castShadow = true;
@@ -106,13 +158,15 @@ function createWall(
   const boundsWidth = rotatedQuarterTurn ? depth : width;
   const boundsDepth = rotatedQuarterTurn ? width : depth;
 
-  worldWalls.push({
+  const wallBounds = {
     minX: x - boundsWidth / 2,
     maxX: x + boundsWidth / 2,
     minZ: z - boundsDepth / 2,
     maxZ: z + boundsDepth / 2,
     height,
-  });
+  };
+  worldWalls.push(wallBounds);
+  addWallToSpatialHash(wallBounds);
 
   return wall;
 }
@@ -298,6 +352,11 @@ function setMazeBounds(minX, maxX, minZ, maxZ) {
 }
 
 function buildMazeFromAsciiMap(rows, options = {}) {
+  const mapInfo = window.levelUtils.inspect(rows);
+  if (!mapInfo.valid) {
+    throw new Error(`Некорректная карта: ${mapInfo.errors.join(" ")}`);
+  }
+  rows = mapInfo.map;
   clearMaze();
 
   const cellSize = options.cellSize ?? 2;
@@ -322,8 +381,13 @@ function buildMazeFromAsciiMap(rows, options = {}) {
       const x = originX + colIndex * cellSize;
       const z = originZ + rowIndex * cellSize;
 
-      if (cell === "#" || cell === "|") {
-        createWall(x, 0, z, cellSize, wallHeight, cellSize, wallColor);
+      if (cell === "#") {
+        let runEnd = colIndex + 1;
+        while (runEnd < row.length && row[runEnd] === "#") runEnd += 1;
+        const runLength = runEnd - colIndex;
+        const runCenterX = x + ((runLength - 1) * cellSize) / 2;
+        createWall(runCenterX, 0, z, runLength * cellSize, wallHeight, cellSize, wallColor);
+        colIndex = runEnd - 1;
       } else if (cell === "L") {
         // place lamp at cell: above walls
         const lampY = wallHeight + 0.6;
@@ -352,17 +416,22 @@ function clearMaze() {
   for (const mesh of wallMeshes) {
     levelGroup.remove(mesh);
     mesh.geometry.dispose();
-    mesh.material.dispose();
   }
 
   wallMeshes.length = 0;
   worldWalls.length = 0;
+  wallSpatialHash.clear();
   mazeBounds.active = false;
 
   // 🔥 ОЧИЩАЕМ ЛАМПЫ
   for (const lamp of lamps) {
     scene.remove(lamp.light);
-    // удаляем другие объекты...
+    scene.remove(lamp.target);
+    for (const object of [lamp.mesh, lamp.rope, lamp.shell, lamp.innerCone, lamp.glow]) {
+      levelGroup.remove(object);
+      object.geometry.dispose();
+      object.material.dispose();
+    }
   }
   lamps.length = 0;
   lampCounter = 0; // ← сбрасываем счетчик
@@ -373,6 +442,7 @@ window.buildMazeFromAsciiMap = buildMazeFromAsciiMap;
 window.clearMaze = clearMaze;
 window.setMazeBounds = setMazeBounds;
 window.worldWalls = worldWalls;
+window.getNearbyWalls = getNearbyWalls;
 window.mazeBounds = mazeBounds;
 window.wallMeshes = wallMeshes;
 window.levelGroup = levelGroup;

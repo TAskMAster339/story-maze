@@ -6,8 +6,8 @@ const moveState = {
   back: false,
   left: false,
   right: false,
+  run: false,
 };
-
 const overlay = document.getElementById("overlay");
 const startBtn = document.getElementById("startBtn");
 const glareOverlay = document.createElement("div");
@@ -37,9 +37,11 @@ document.addEventListener("mousemove", (e) => {
   if (window.editorActive) return;
   if (document.pointerLockElement !== renderer.domElement) return;
 
-  const sensitivity = 0.0022;
-  yaw -= e.movementX * sensitivity;
-  pitch -= e.movementY * sensitivity;
+  const { lookSensitivity, maxMouseDelta } = window.GAME_CONFIG.player;
+  const clampDelta = (value) =>
+    Math.max(-maxMouseDelta, Math.min(maxMouseDelta, value));
+  yaw -= clampDelta(e.movementX) * lookSensitivity;
+  pitch -= clampDelta(e.movementY) * lookSensitivity;
   pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, pitch));
 });
 
@@ -47,6 +49,10 @@ document.addEventListener("keydown", (e) => {
   if (window.editorActive) return;
 
   switch (e.code) {
+    case "ShiftLeft":
+    case "ShiftRight":
+      moveState.run = true;
+      break;
     case "KeyW":
     case "ArrowUp":
       moveState.forward = true;
@@ -70,6 +76,10 @@ document.addEventListener("keyup", (e) => {
   if (window.editorActive) return;
 
   switch (e.code) {
+    case "ShiftLeft":
+    case "ShiftRight":
+      moveState.run = false;
+      break;
     case "KeyW":
     case "ArrowUp":
       moveState.forward = false;
@@ -146,7 +156,10 @@ function updateFall(dt) {
 }
 
 function collidesAt(x, z) {
-  for (const wall of worldWalls) {
+  const candidates = typeof window.getNearbyWalls === "function"
+    ? window.getNearbyWalls(x, z, PLAYER_RADIUS)
+    : worldWalls;
+  for (const wall of candidates) {
     if (
       x > wall.minX - PLAYER_RADIUS &&
       x < wall.maxX + PLAYER_RADIUS &&
@@ -161,6 +174,7 @@ function collidesAt(x, z) {
 }
 
 const clock = new THREE.Clock();
+const glareRaycaster = new THREE.Raycaster();
 
 function updateMovement(dt) {
   // Do not block movement while falling: allow movement and look during fall.
@@ -169,7 +183,9 @@ function updateMovement(dt) {
   camera.rotation.y = yaw;
   camera.rotation.x = pitch;
 
-  const baseSpeed = 6;
+  const baseSpeed = moveState.run
+    ? window.GAME_CONFIG.player.runSpeed
+    : window.GAME_CONFIG.player.walkSpeed;
   const speed = baseSpeed * dt;
   let dx = 0;
   let dz = 0;
@@ -196,6 +212,13 @@ function updateMovement(dt) {
     dz += rz * speed;
   }
 
+  const movementLength = Math.hypot(dx, dz);
+  if (movementLength > speed) {
+    const scale = speed / movementLength;
+    dx *= scale;
+    dz *= scale;
+  }
+
   const nextX = camera.position.x + dx;
   const nextZ = camera.position.z + dz;
 
@@ -211,7 +234,6 @@ function updateMovement(dt) {
     !window.isInsideArena(camera.position.x, camera.position.z)
   ) {
     startFall();
-    updateFall(dt);
     return;
   }
 
@@ -250,6 +272,13 @@ function animate() {
 
     const dirToLamp = delta.normalize();
     const dot = forward.dot(dirToLamp);
+
+    const mightGlare = dot > 0.96 || (distance < 3.0 && dot > 0.3);
+    if (!mightGlare) continue;
+
+    glareRaycaster.set(camera.position, dirToLamp);
+    const wallHits = glareRaycaster.intersectObjects(window.wallMeshes || [], false);
+    if (wallHits.length > 0 && wallHits[0].distance < distance - 0.1) continue;
 
     // 🔥 ОСЛЕПЛЕНИЕ ВСЕГО ЭКРАНА ПРИ БЛИЗОСТИ
     // Настройки (подберите под свой вкус)

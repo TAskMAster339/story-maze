@@ -193,12 +193,13 @@ const MAZE_MAP = [
 window.levelMap = MAZE_MAP;
 window.spawnPoint = null;
 
-function rebuildLevelFromMap() {
+function rebuildLevelFromMap(buildOptions = {}) {
   const spawn = buildMazeFromAsciiMap(window.levelMap, {
     cellSize: LEVEL_CELL_SIZE,
     wallHeight: LEVEL_CELL_SIZE * 3,
     wallDepth: 0.5,
     wallColor: 0x8b5a2b,
+    ...buildOptions,
   });
 
   if (spawn) {

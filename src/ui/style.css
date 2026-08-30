@@ -77,6 +77,25 @@ canvas {
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
+.debug-level-row {
+    color: rgba(216, 228, 255, 0.75);
+}
+
+.debug-level-select {
+    min-width: 0;
+    flex: 1;
+    padding: 3px 5px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ecf4ff;
+    font: inherit;
+}
+
+#debugOverlay[hidden] {
+    display: none !important;
+}
+
 #glareOverlay {
     position: fixed;
     inset: 0;
@@ -94,7 +113,7 @@ canvas {
             /* ← увеличиваем радиус */
         );
     opacity: 0;
-    transition: opacity 10s ease-out;
+    transition: opacity 120ms ease-out;
     /* ← быстрее реагирует */
     mix-blend-mode: screen;
 }
