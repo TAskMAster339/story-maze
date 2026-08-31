@@ -1,7 +1,7 @@
 // Runtime settings shared by the game modules.
 // Override these values in a project-specific config before loading the runtime.
 window.GAME_CONFIG = {
-  debug: false,
+  debug: true,
   render: {
     maxPixelRatio: 1.5,
     maxAnisotropy: 4,

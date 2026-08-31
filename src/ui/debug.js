@@ -184,6 +184,18 @@ const levelSelect = lampControls.querySelector(".debug-level-select");
 let selectedLampIndex = 0;
 let currentHelper = null;
 
+function disposeHelper() {
+  if (!currentHelper) return;
+  scene.remove(currentHelper);
+  currentHelper.geometry?.dispose();
+  if (Array.isArray(currentHelper.material)) {
+    for (const material of currentHelper.material) material.dispose();
+  } else {
+    currentHelper.material?.dispose();
+  }
+  currentHelper = null;
+}
+
 function refreshLevelSelector() {
   if (!levelSelect || !window.levelRegistry) return;
   levelSelect.replaceChildren();
@@ -222,10 +234,7 @@ function refreshLampInfo() {
 }
 
 function showHelperForSelected() {
-  if (currentHelper) {
-    scene.remove(currentHelper);
-    currentHelper = null;
-  }
+  disposeHelper();
   if (!lampHelperToggle.checked) return;
   const list = window.lamps || [];
   const cur = list[selectedLampIndex];
@@ -234,6 +243,10 @@ function showHelperForSelected() {
   scene.add(helper);
   currentHelper = helper;
 }
+
+// Level rebuilds remove lamp lights from the scene. Dispose the helper too,
+// otherwise every rebuild/selection can leave WebGL buffers behind.
+window.addEventListener("mazelevelclear", disposeHelper);
 
 lampPrev.addEventListener("click", () => {
   const list = window.lamps || [];

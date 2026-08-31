@@ -1,4 +1,5 @@
 const SPAWN_YAW = THREE.MathUtils.degToRad(-89.55);
+const PLAYER_STATE_KEY = "maze-player-state";
 let yaw = SPAWN_YAW;
 let pitch = 0;
 
@@ -169,6 +170,10 @@ document.addEventListener("keydown", (e) => {
   if (window.editorActive) return;
 
   switch (e.code) {
+    case "Digit1":
+      e.preventDefault();
+      respawnPlayer();
+      break;
     case "ShiftLeft":
     case "ShiftRight":
       moveState.run = true;
@@ -223,15 +228,56 @@ function getSpawnPoint() {
   return window.spawnPoint || { x: 0, y: PLAYER_HEIGHT, z: 0 };
 }
 
+function savePlayerState() {
+  try {
+    sessionStorage.setItem(PLAYER_STATE_KEY, JSON.stringify({
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+      yaw,
+      pitch,
+    }));
+  } catch {
+    // Storage may be unavailable in private or restricted browser contexts.
+  }
+}
+
+function restorePlayerState() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(PLAYER_STATE_KEY) || "null");
+    if (!saved || ![saved.x, saved.y, saved.z, saved.yaw, saved.pitch].every(Number.isFinite)) return;
+    camera.position.set(saved.x, saved.y, saved.z);
+    yaw = saved.yaw;
+    pitch = THREE.MathUtils.clamp(saved.pitch, -Math.PI / 2 + 0.05, Math.PI / 2 - 0.05);
+    camera.rotation.set(pitch, yaw, 0);
+    window.updateSkyAnchor?.(camera.position);
+  } catch {
+    // Ignore malformed or unavailable saved state and use the normal spawn.
+  }
+}
+
+window.addEventListener("pagehide", savePlayerState);
+window.addEventListener("beforeunload", savePlayerState);
+
 function respawnPlayer() {
   const spawn = getSpawnPoint();
   camera.position.set(spawn.x, spawn.y, spawn.z);
   yaw = SPAWN_YAW;
   pitch = 0;
-  camera.rotation.set(0, 0, 0);
+  camera.rotation.set(0, SPAWN_YAW, 0);
   fallState.active = false;
   fallState.velocity = 0;
+  teleportCooldown = 0;
+  teleportTransition.phase = "idle";
+  teleportTransition.elapsed = 0;
+  teleportFadeOverlay.style.opacity = "0";
+  glareOverlay.style.opacity = "0";
+  window.setTeleportFog?.(0);
+  window.updateSkyAnchor?.(camera.position);
+  window.updateRenderVisibility?.(camera.position.x, camera.position.z);
 }
+
+window.respawnPlayer = respawnPlayer;
 
 function startFall() {
   if (fallState.active) return;
@@ -452,9 +498,13 @@ function animate() {
     updateFall(dt);
   }
 
+  if (typeof window.updateSkyAnchor === "function") {
+    window.updateSkyAnchor(camera.position);
+  }
   renderer.render(scene, camera);
 }
 
+restorePlayerState();
 animate();
 refreshStartOverlay();
 window.teleportTransition = teleportTransition;

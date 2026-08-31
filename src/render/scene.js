@@ -30,6 +30,8 @@ function createSkyRandom(seed = 0x5a17c9e3) {
 }
 
 const skyRadius = 460;
+const skyGroup = new THREE.Group();
+skyGroup.name = "staticSky";
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(skyRadius, 32, 20),
   new THREE.ShaderMaterial({
@@ -113,9 +115,65 @@ const stars = new THREE.Points(
 );
 stars.renderOrder = -999;
 stars.frustumCulled = false;
-camera.add(sky);
-camera.add(stars);
+
+function createMoonTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  const glow = context.createRadialGradient(128, 128, 52, 128, 128, 128);
+  glow.addColorStop(0, "rgba(255, 248, 211, 0.34)");
+  glow.addColorStop(0.42, "rgba(216, 226, 255, 0.10)");
+  glow.addColorStop(1, "rgba(216, 226, 255, 0)");
+  context.fillStyle = glow;
+  context.fillRect(0, 0, 256, 256);
+  context.beginPath();
+  context.arc(128, 128, 66, 0, Math.PI * 2);
+  context.fillStyle = "#fff4c7";
+  context.shadowColor = "rgba(255, 244, 199, 0.8)";
+  context.shadowBlur = 18;
+  context.fill();
+  context.shadowBlur = 0;
+  context.fillStyle = "rgba(166, 153, 125, 0.22)";
+  for (const crater of [[101, 95, 11], [148, 86, 8], [157, 133, 14], [111, 151, 7], [133, 116, 5]]) {
+    context.beginPath();
+    context.arc(crater[0], crater[1], crater[2], 0, Math.PI * 2);
+    context.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+
+const moon = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: createMoonTexture(),
+  transparent: true,
+  depthWrite: false,
+  depthTest: false,
+  fog: false,
+}));
+moon.name = "moon";
+moon.position.set(42, 20, -3);
+moon.scale.set(8, 8, 1);
+moon.material.opacity = 0;
+moon.renderOrder = -998;
+
+skyGroup.add(sky);
+skyGroup.add(stars);
+skyGroup.add(moon);
+scene.add(skyGroup);
 scene.add(camera);
+
+// Небо закреплено на направлении взгляда: оно не имеет параллакса при ходьбе,
+// но остаётся неподвижным относительно мира при повороте камеры.
+const skyAnchorPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+function updateSkyAnchor(position) {
+  if (skyAnchorPosition.distanceToSquared(position) < 1e-8) return;
+  skyAnchorPosition.copy(position);
+  skyGroup.position.copy(position);
+}
+updateSkyAnchor(camera.position);
 
 // свет — просто чтобы что-то было видно
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
@@ -123,6 +181,13 @@ scene.add(hemi);
 const dir = new THREE.DirectionalLight(0xffffff, 0.8);
 dir.position.set(10, 20, 10);
 scene.add(dir);
+
+// Мягкий холодный заполняющий свет открытых участков под луной.
+// Он не создаёт видимого источника и включается только на клетках `,`.
+const moonHemi = new THREE.HemisphereLight(0x91a9df, 0x101426, 0);
+moonHemi.name = "moonlight";
+scene.add(moonHemi);
+let nightMode = true;
 
 // keep day/night presets
 const _dayLight = { hemi: 1.0, dir: 0.8 };
@@ -184,12 +249,16 @@ const mazeBounds = {
 };
 const teleporters = [];
 const billboards = [];
+const imageBillboards = [];
+const MAX_VISIBLE_IMAGE_BILLBOARDS = 5;
+const IMAGE_BILLBOARD_DISTANCE = 72;
 const upperFogLayers = [];
 const openSkyCells = new Set();
 const levelGrid = { originX: 0, originZ: 0, cellSize: LEVEL_CELL_SIZE, active: false };
 let fogAmount = 0.58;
 let teleportFog = 0;
 let lastCameraFar = camera.far;
+let levelBuildGeneration = 0;
 
 function isInsideMaze(x, z, margin = 0) {
   return mazeBounds.active && x >= mazeBounds.minX - margin && x <= mazeBounds.maxX + margin &&
@@ -235,6 +304,21 @@ function updateMazeAtmosphere(x, z, dt = 1 / 60) {
   const target = Math.max(outdoors ? 0 : 0.58, teleportFog);
   const smoothing = 1 - Math.exp(-Math.max(dt, 0.001) * (target > fogAmount ? 3.8 : 1.7));
   fogAmount = THREE.MathUtils.lerp(fogAmount, target, smoothing);
+
+  const moonLightTarget = nightMode && isOpenSkyAt(x, z) ? 0.14 : 0;
+  moonHemi.intensity = THREE.MathUtils.lerp(
+    moonHemi.intensity,
+    moonLightTarget,
+    1 - Math.exp(-Math.max(dt, 0.001) * 2.8),
+  );
+
+  const skyVisible = !isInsideMaze(x, z, 1.5) || isOpenSkyAt(x, z);
+  const moonVisibilityTarget = nightMode && skyVisible && fogAmount < 0.22 ? 1 : 0;
+  moon.material.opacity = THREE.MathUtils.lerp(
+    moon.material.opacity,
+    moonVisibilityTarget,
+    1 - Math.exp(-Math.max(dt, 0.001) * 4.5),
+  );
 
   if (fogAmount < 0.006) {
     scene.fog = null;
@@ -308,9 +392,9 @@ function buildUpperFog(wallHeight) {
   const centerX = (mazeBounds.minX + mazeBounds.maxX) / 2;
   const centerZ = (mazeBounds.minZ + mazeBounds.maxZ) / 2;
   const layerSettings = [
-    { height: wallHeight + 3, opacity: 0.12 },
-    { height: wallHeight + 5.5, opacity: 0.18 },
-    { height: wallHeight + 8, opacity: 0.28 },
+    { height: wallHeight + 3, opacity: 0.18 },
+    { height: wallHeight + 5.5, opacity: 0.28 },
+    { height: wallHeight + 8, opacity: 0.4 },
   ];
   layerSettings.forEach((settings, index) => {
     const texture = makeUpperFogTexture(index + 17);
@@ -335,28 +419,103 @@ function buildUpperFog(wallHeight) {
   });
 }
 
-function makeBillboardCanvas(title, body, imageUrl = "") {
+function makeBillboardCanvas(title, body, imageUrl = "", buildGeneration = levelBuildGeneration) {
+  const layoutWidth = 768;
+  const textWidth = 690;
+  const lineHeight = 34;
+  const bodyText = String(body || "").trim();
+  const measureCanvas = document.createElement("canvas");
+  const measureContext = measureCanvas.getContext("2d");
+  measureContext.font = "26px Arial";
+  const bodyLines = [];
+  for (const paragraph of bodyText ? bodyText.split(/\r?\n/) : [""]) {
+    let line = "";
+    for (const word of paragraph.split(/\s+/)) {
+      if (!word) continue;
+      const next = `${line} ${word}`.trim();
+      if (line && measureContext.measureText(next).width > textWidth) {
+        bodyLines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+    }
+    if (line) bodyLines.push(line);
+  }
+
+  const bodyStart = imageUrl ? 625 : 135;
+  const minimumHeight = imageUrl ? 640 : 380;
+  const layoutHeight = Math.max(
+    minimumHeight,
+    bodyStart + Math.max(bodyLines.length, 1) * lineHeight + 28,
+  );
   const canvas = document.createElement("canvas");
-  canvas.width = 768; canvas.height = imageUrl ? 640 : 380;
+  const canvasResolutionScale = 2;
+  canvas.width = layoutWidth * canvasResolutionScale;
+  canvas.height = layoutHeight * canvasResolutionScale;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "rgba(8, 12, 27, .88)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = "rgba(137, 185, 255, .85)"; ctx.lineWidth = 5; ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+  ctx.scale(canvasResolutionScale, canvasResolutionScale);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(8, 12, 27, .88)"; ctx.fillRect(0, 0, layoutWidth, layoutHeight);
+  ctx.strokeStyle = "rgba(137, 185, 255, .85)"; ctx.lineWidth = 5; ctx.strokeRect(10, 10, layoutWidth - 20, layoutHeight - 20);
   const texture = new THREE.CanvasTexture(canvas);
+  // Image billboards are large transparent UI-like surfaces. Generating a
+  // complete mipmap chain on their first visible frame causes a noticeable
+  // stall (especially when several billboards become visible together).
+  // Keep the full-resolution canvas, but use a non-mipmapped filter so the
+  // first GPU upload stays small and predictable.
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.anisotropy = 1;
   const drawText = () => {
-    ctx.fillStyle = "#f4f7ff"; ctx.font = "bold 42px Arial"; ctx.fillText(title, 38, imageUrl ? 590 : 85);
+    ctx.fillStyle = "#f4f7ff"; ctx.font = "bold 42px Arial"; ctx.fillText(title, layoutWidth / 2, imageUrl ? 590 : 85);
     ctx.fillStyle = "#c9d7f5"; ctx.font = "26px Arial";
-    const words = String(body || "").split(/\s+/); let line = ""; let y = imageUrl ? 625 : 135;
-    for (const word of words) { const next = `${line} ${word}`.trim(); if (ctx.measureText(next).width > 690) { ctx.fillText(line, 38, y); line = word; y += 34; } else line = next; }
-    if (line) ctx.fillText(line, 38, y); texture.needsUpdate = true;
+    bodyLines.forEach((line, index) => {
+      ctx.fillText(line, layoutWidth / 2, bodyStart + index * lineHeight);
+    });
+    texture.needsUpdate = true;
   };
-  if (imageUrl) { const image = new Image(); image.onload = () => { ctx.drawImage(image, 38, 35, 692, 500); drawText(); }; image.src = imageUrl; } else drawText();
+  if (imageUrl) {
+    const image = new Image();
+    image.onload = () => {
+      // A level rebuild can dispose this texture before the image request
+      // completes. Do not let a stale callback retain or update old GPU data.
+      if (buildGeneration !== levelBuildGeneration) {
+        texture.dispose();
+        return;
+      }
+      const boxX = 38;
+      const boxY = 35;
+      const boxWidth = 692;
+      const boxHeight = 500;
+      const scale = Math.min(boxWidth / image.naturalWidth, boxHeight / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      const drawX = boxX + (boxWidth - drawWidth) / 2;
+      const drawY = boxY + (boxHeight - drawHeight) / 2;
+      ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      drawText();
+    };
+    image.src = imageUrl;
+  } else drawText();
   return texture;
 }
 
 function createBillboard({ x, y = 3.2, z, title, text, image }) {
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeBillboardCanvas(title, text, image), transparent: true, depthWrite: false }));
-  sprite.position.set(x, y, z); sprite.scale.set(image ? 4.4 : 4.1, image ? 3.7 : 2.1, 1);
-  sprite.userData.billboard = true; levelGroup.add(sprite); billboards.push(sprite); return sprite;
+  const texture = makeBillboardCanvas(title, text, image, levelBuildGeneration);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  const width = image ? 3.2 : 4.1;
+  sprite.position.set(x, y, z);
+  sprite.scale.set(width, width * (texture.image.height / texture.image.width), 1);
+  sprite.userData.billboard = true;
+  sprite.userData.hasImage = Boolean(image);
+  levelGroup.add(sprite);
+  billboards.push(sprite);
+  if (image) imageBillboards.push(sprite);
+  return sprite;
 }
 
 function addNarrativeContent(options = {}) {
@@ -388,6 +547,25 @@ function updateRenderVisibility(x, z) {
   }
 
   nearby.sort((a, b) => a.distanceSq - b.distanceSq);
+
+  // Image billboards keep their original resolution, but only the closest
+  // few participate in rendering. This removes the expensive transparent
+  // overdraw from distant screenshots without reducing visible quality.
+  const nearbyImages = [];
+  for (const billboard of imageBillboards) {
+    const dx = billboard.position.x - x;
+    const dz = billboard.position.z - z;
+    const distanceSq = dx * dx + dz * dz;
+    billboard.visible = false;
+    if (distanceSq <= IMAGE_BILLBOARD_DISTANCE ** 2) {
+      nearbyImages.push({ billboard, distanceSq });
+    }
+  }
+  nearbyImages.sort((a, b) => a.distanceSq - b.distanceSq);
+  for (let index = 0; index < Math.min(MAX_VISIBLE_IMAGE_BILLBOARDS, nearbyImages.length); index += 1) {
+    nearbyImages[index].billboard.visible = true;
+  }
+
   for (let index = 0; index < activeLampLights.length; index += 1) {
     const pooled = activeLampLights[index];
     const entry = nearby[index];
@@ -659,7 +837,7 @@ function createLamp(x, y, z, opts = {}) {
 
   // thin rope anchored to the top of the cone
   const ropeStart = new THREE.Vector3(x, lampY + 2, z);
-  const ropeEnd = new THREE.Vector3(x, lampY + 6.5, z);
+  const ropeEnd = new THREE.Vector3(x, 100, z);
   const ropeLength = ropeEnd.y - ropeStart.y;
   const ropeGeometry = new THREE.CylinderGeometry(0.022, 0.022, ropeLength, 6);
   const ropeMaterial = new THREE.ShaderMaterial({
@@ -679,7 +857,10 @@ function createLamp(x, y, z, opts = {}) {
       uniform float ropeOpacity;
       varying vec2 vRopeUv;
       void main() {
-        float fade = 1.0 - smoothstep(0.42, 1.0, vRopeUv.y);
+        // Keep the section near the lamp readable, then let the upper
+        // section dissolve into the denser ceiling haze. The rope geometry
+        // remains full length; only its visibility is attenuated.
+        float fade = 1.0 - smoothstep(0.14, 0.56, vRopeUv.y);
         float alpha = ropeOpacity * fade;
         if (alpha < 0.01) discard;
         gl_FragColor = vec4(ropeColor, alpha);
@@ -796,6 +977,7 @@ function resetLampCounter() {
 }
 
 function setNightMode(on = true) {
+  nightMode = on;
   if (on) {
     scene.background = new THREE.Color(0x060712);
     hemi.intensity = _nightLight.hemi;
@@ -810,6 +992,8 @@ function setNightMode(on = true) {
     scene.background = new THREE.Color(0x87ceeb);
     hemi.intensity = _dayLight.hemi;
     dir.intensity = _dayLight.dir;
+    moonHemi.intensity = 0;
+    moon.material.opacity = 0;
     for (const lp of lamps) {
       lp.light.intensity = 0.0;
       if (lp.cone) lp.cone.visible = false;
@@ -918,6 +1102,8 @@ function buildMazeFromAsciiMap(rows, options = {}) {
 }
 // Добавляем в clearMaze:
 function clearMaze() {
+  levelBuildGeneration += 1;
+  window.dispatchEvent(new Event("mazelevelclear"));
   clearUpperFog();
   for (const mesh of wallMeshes) {
     levelGroup.remove(mesh);
@@ -933,6 +1119,7 @@ function clearMaze() {
     billboard.material.dispose();
   }
   billboards.length = 0;
+  imageBillboards.length = 0;
   teleporters.length = 0;
   openSkyCells.clear();
   levelGrid.active = false;
@@ -964,6 +1151,10 @@ function clearMaze() {
 window.createWall = createWall;
 window.scene = scene;
 window.camera = camera;
+window.updateSkyAnchor = updateSkyAnchor;
+window.skyGroup = skyGroup;
+window.stars = stars;
+window.moon = moon;
 window.buildMazeFromAsciiMap = buildMazeFromAsciiMap;
 window.clearMaze = clearMaze;
 window.setMazeBounds = setMazeBounds;
@@ -983,4 +1174,5 @@ window.setTeleportFog = setTeleportFog;
 window.beginTeleportFogReveal = beginTeleportFogReveal;
 window.updateRenderVisibility = updateRenderVisibility;
 window.teleporters = teleporters;
+window.imageBillboards = imageBillboards;
 window.addNarrativeContent = addNarrativeContent;
