@@ -3,16 +3,53 @@
   <head>
     <meta charset="UTF-8" />
     <title>Лабиринт разума</title>
+    <meta name="description" content="Путешествие по лабиринту разума Дмитрия Гришко." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Лабиринт разума" />
+    <meta property="og:description" content="Путешествие по лабиринту разума Дмитрия Гришко." />
+    <meta property="og:image" content="assets/projects/preview.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="assets/projects/preview.png" />
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
     <link rel="stylesheet" href="src/ui/style.css" />
   </head>
   <body>
+    <div id="loadingScreen" role="status" aria-live="polite">
+      <div class="loading-content">
+        <div class="loading-title">Вы входите в мозг Дмитрия Гришко</div>
+        <div class="loading-quote">«Отринь надежду всяк сюда входящий, и подожди немного»</div>
+      </div>
+      <div class="loading-progress" aria-hidden="true">
+        <div id="loadingProgressBar"></div>
+      </div>
+    </div>
     <div id="overlay">
-      <h1>Лабиринт разума</h1>
-      <p>
-        Путешествие по комнатам мыслей и проектов. W A S D — движение, мышь — обзор,
-        Shift — бег, Esc — отпустить курсор.
-      </p>
-      <button id="startBtn">Начать</button>
+      <div class="pause-menu">
+        <div class="pause-main">
+          <button id="startBtn">Продолжить</button>
+        </div>
+        <aside class="pause-side-panel">
+          <section class="pause-settings" aria-label="Настройки">
+            <label class="setting-row" for="brightnessSlider">
+              <span>Яркость</span>
+              <input id="brightnessSlider" type="range" min="0.5" max="1.5" step="0.01" value="1" />
+            </label>
+            <label class="setting-row" for="volumeSlider">
+              <span>Громкость</span>
+              <input id="volumeSlider" type="range" min="0" max="100" step="1" value="70" />
+            </label>
+            <div class="screamer-warning">Осторожно, скримеры</div>
+          </section>
+          <section class="pause-controls" aria-label="Управление">
+            <div class="control-line"><kbd>W A S D</kbd><span>движение</span></div>
+            <div class="control-line"><kbd>Мышь</kbd><span>обзор</span></div>
+            <div class="control-line"><kbd>Shift</kbd><span>бег</span></div>
+            <div class="control-line"><kbd>Esc</kbd><span>отпустить мышь</span></div>
+            <div class="control-line"><kbd>F11</kbd><span>полный экран</span></div>
+            <div class="control-line"><kbd>1</kbd><span>вернуться на спавн</span></div>
+          </section>
+        </aside>
+      </div>
     </div>
     <div id="crosshair"></div>
 
@@ -23,6 +60,7 @@
     <script src="src/render/scene.js"></script>
     <script src="src/world/maze-level2.js"></script>
     <script src="src/world/level-registry.js"></script>
-    <script src="src/core/runtime-loader.js"></script>
+    <script src="src/core/runtime-loader.js?v=final-ui-6"></script>
+    <script src="src/ui/startup.js?v=final-ui-6"></script>
   </body>
 </html>

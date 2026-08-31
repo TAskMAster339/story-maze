@@ -138,6 +138,14 @@ function checkSeamlessTeleport(dt) {
   startTeleportTransition();
 }
 
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.().catch?.(() => {});
+    return;
+  }
+  document.documentElement.requestFullscreen?.().catch?.(() => {});
+}
+
 function refreshStartOverlay() {
   overlay.style.display =
     window.editorActive || document.pointerLockElement === renderer.domElement
@@ -170,6 +178,10 @@ document.addEventListener("keydown", (e) => {
   if (window.editorActive) return;
 
   switch (e.code) {
+    case "F11":
+      e.preventDefault();
+      toggleFullscreen();
+      break;
     case "Digit1":
       e.preventDefault();
       respawnPlayer();
@@ -501,6 +513,7 @@ function animate() {
   if (typeof window.updateSkyAnchor === "function") {
     window.updateSkyAnchor(camera.position);
   }
+  window.updateSkyRotation?.(dt);
   renderer.render(scene, camera);
 }
 

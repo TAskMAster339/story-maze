@@ -168,10 +168,15 @@ scene.add(camera);
 // Небо закреплено на направлении взгляда: оно не имеет параллакса при ходьбе,
 // но остаётся неподвижным относительно мира при повороте камеры.
 const skyAnchorPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+const SKY_ROTATION_SPEED = 0.0007;
 function updateSkyAnchor(position) {
   if (skyAnchorPosition.distanceToSquared(position) < 1e-8) return;
   skyAnchorPosition.copy(position);
   skyGroup.position.copy(position);
+}
+function updateSkyRotation(dt = 0) {
+  if (!Number.isFinite(dt) || dt <= 0) return;
+  skyGroup.rotation.y = (skyGroup.rotation.y + dt * SKY_ROTATION_SPEED) % (Math.PI * 2);
 }
 updateSkyAnchor(camera.position);
 
@@ -258,6 +263,10 @@ const levelGrid = { originX: 0, originZ: 0, cellSize: LEVEL_CELL_SIZE, active: f
 let fogAmount = 0.58;
 let teleportFog = 0;
 let lastCameraFar = camera.far;
+let lastFogNear = mazeFog.near;
+let lastFogFar = mazeFog.far;
+let lastUpperFogStrength = -1;
+let lastMoonOpacity = -1;
 let levelBuildGeneration = 0;
 
 function isInsideMaze(x, z, margin = 0) {
@@ -314,19 +323,31 @@ function updateMazeAtmosphere(x, z, dt = 1 / 60) {
 
   const skyVisible = !isInsideMaze(x, z, 1.5) || isOpenSkyAt(x, z);
   const moonVisibilityTarget = nightMode && skyVisible && fogAmount < 0.22 ? 1 : 0;
-  moon.material.opacity = THREE.MathUtils.lerp(
+  const nextMoonOpacity = THREE.MathUtils.lerp(
     moon.material.opacity,
     moonVisibilityTarget,
     1 - Math.exp(-Math.max(dt, 0.001) * 4.5),
   );
+  if (Math.abs(nextMoonOpacity - lastMoonOpacity) > 0.001) {
+    moon.material.opacity = nextMoonOpacity;
+    lastMoonOpacity = nextMoonOpacity;
+  }
 
   if (fogAmount < 0.006) {
     scene.fog = null;
   } else {
     scene.fog = mazeFog;
     const clearFactor = 1 - fogAmount;
-    mazeFog.near = 0.5 + clearFactor ** 4 * 40;
-    mazeFog.far = 4.5 + clearFactor ** 4 * 845;
+    const nextFogNear = 0.5 + clearFactor ** 4 * 40;
+    const nextFogFar = 4.5 + clearFactor ** 4 * 845;
+    if (Math.abs(nextFogNear - lastFogNear) > 0.05) {
+      mazeFog.near = nextFogNear;
+      lastFogNear = nextFogNear;
+    }
+    if (Math.abs(nextFogFar - lastFogFar) > 0.5) {
+      mazeFog.far = nextFogFar;
+      lastFogFar = nextFogFar;
+    }
   }
 
   const desiredFar = fogAmount < 0.02 ? 900 : Math.max(60, mazeFog.far + 28);
@@ -337,9 +358,12 @@ function updateMazeAtmosphere(x, z, dt = 1 / 60) {
   }
 
   const upperFogStrength = THREE.MathUtils.clamp(fogAmount / 0.58, 0, 1);
-  for (const layer of upperFogLayers) {
-    layer.visible = upperFogStrength > 0.01;
-    layer.material.opacity = layer.userData.baseOpacity * upperFogStrength;
+  if (Math.abs(upperFogStrength - lastUpperFogStrength) > 0.001) {
+    for (const layer of upperFogLayers) {
+      layer.visible = upperFogStrength > 0.01;
+      layer.material.opacity = layer.userData.baseOpacity * upperFogStrength;
+    }
+    lastUpperFogStrength = upperFogStrength;
   }
 }
 
@@ -450,7 +474,11 @@ function makeBillboardCanvas(title, body, imageUrl = "", buildGeneration = level
     bodyStart + Math.max(bodyLines.length, 1) * lineHeight + 28,
   );
   const canvas = document.createElement("canvas");
-  const canvasResolutionScale = 2;
+  // These billboards are viewed at a small world-space size. A 2x backing
+  // canvas for every narrative entry creates hundreds of megabytes of CPU
+  // canvas memory before WebGL uploads any texture. Keep text crisp while
+  // avoiding oversized buffers that cause walking hitching and memory spikes.
+  const canvasResolutionScale = imageUrl ? 1.25 : 1.5;
   canvas.width = layoutWidth * canvasResolutionScale;
   canvas.height = layoutHeight * canvasResolutionScale;
   const ctx = canvas.getContext("2d");
@@ -524,7 +552,16 @@ function addNarrativeContent(options = {}) {
 }
 
 let lastVisibilityCell = "";
+let pendingImageBillboards = [];
+
 function updateRenderVisibility(x, z) {
+  // Admit at most one new large transparent texture per frame. The first
+  // render of a CanvasTexture performs its GPU upload; revealing five new
+  // billboards at once creates a visible hitch while walking between cells.
+  if (pendingImageBillboards.length > 0) {
+    pendingImageBillboards.shift().visible = true;
+  }
+
   const visibilityCell = `${Math.floor(x / 8)}:${Math.floor(z / 8)}`;
   if (visibilityCell === lastVisibilityCell) return;
   lastVisibilityCell = visibilityCell;
@@ -556,15 +593,20 @@ function updateRenderVisibility(x, z) {
     const dx = billboard.position.x - x;
     const dz = billboard.position.z - z;
     const distanceSq = dx * dx + dz * dz;
-    billboard.visible = false;
+    if (distanceSq > IMAGE_BILLBOARD_DISTANCE ** 2) billboard.visible = false;
     if (distanceSq <= IMAGE_BILLBOARD_DISTANCE ** 2) {
       nearbyImages.push({ billboard, distanceSq });
     }
   }
   nearbyImages.sort((a, b) => a.distanceSq - b.distanceSq);
-  for (let index = 0; index < Math.min(MAX_VISIBLE_IMAGE_BILLBOARDS, nearbyImages.length); index += 1) {
-    nearbyImages[index].billboard.visible = true;
+  const desiredImages = nearbyImages
+    .slice(0, MAX_VISIBLE_IMAGE_BILLBOARDS)
+    .map((entry) => entry.billboard);
+  const desiredImageSet = new Set(desiredImages);
+  for (const billboard of imageBillboards) {
+    if (!desiredImageSet.has(billboard)) billboard.visible = false;
   }
+  pendingImageBillboards = desiredImages.filter((billboard) => !billboard.visible);
 
   for (let index = 0; index < activeLampLights.length; index += 1) {
     const pooled = activeLampLights[index];
@@ -1152,6 +1194,7 @@ window.createWall = createWall;
 window.scene = scene;
 window.camera = camera;
 window.updateSkyAnchor = updateSkyAnchor;
+window.updateSkyRotation = updateSkyRotation;
 window.skyGroup = skyGroup;
 window.stars = stars;
 window.moon = moon;

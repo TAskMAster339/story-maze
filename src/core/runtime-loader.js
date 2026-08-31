@@ -7,7 +7,7 @@
   function loadNext(index) {
     if (index >= scripts.length) return;
     const script = document.createElement("script");
-    script.src = scripts[index];
+    script.src = `${scripts[index]}?v=final-ui-6`;
     script.onload = () => loadNext(index + 1);
     script.onerror = () => {
       throw new Error(`Не удалось загрузить runtime-модуль: ${scripts[index]}`);
